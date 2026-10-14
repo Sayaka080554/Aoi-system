@@ -202,6 +202,7 @@
           <div class="space-y-0.5">
             <a data-nav="view-calc" onclick="Aoi.nav('view-calc')" class="block px-3 py-2 rounded-md text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-100">计算器</a>
             <a data-nav="view-limits" onclick="Aoi.nav('view-limits')" class="block px-3 py-2 rounded-md text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-100">限购计划</a>
+            <a data-nav="view-reservoir" onclick="Aoi.nav('view-reservoir')" class="block px-3 py-2 rounded-md text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-100">蓄水池</a>
             <a data-nav="view-catalog" onclick="Aoi.nav('view-catalog');Aoi.catalog.renderAll()" class="block px-3 py-2 rounded-md text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-100">PCO 目录导入</a>
           </div>
         </div>
@@ -635,6 +636,7 @@
           <button onclick="Aoi.orders.markUnarrived()" class="px-4 py-2 bg-gray-800 text-white text-sm font-bold rounded hover:bg-gray-900">设为未到货</button>
           <button onclick="Aoi.orders.showGenRmb()" class="px-4 py-2 btn-outline text-sm font-bold rounded" title="为勾选的外币订单按公式生成人民币价（0.5 圆整）">批量生成人民币价</button>
           <button onclick="Aoi.orders.selectionStats()" class="px-4 py-2 border border-gray-300 text-gray-600 text-sm font-bold rounded hover:bg-gray-100" title="统计勾选订单：物件总数量 / 本体总金额 / 国际邮费 / 整体总金额">统计勾选</button>
+          <button onclick="Aoi.reservoir.openAssignFromOrders()" class="px-4 py-2 btn-outline text-sm font-bold rounded" title="把勾选订单计入蓄水池（互购净额台账）：选池子与侧向，已在池中的自动跳过，30 秒内可撤销">计入蓄水池</button>
           <button onclick="Aoi.orders.batchDelete()" class="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded hover:bg-red-700">批量删除</button>
         </div>
         <div class="flex gap-2 mb-4">
@@ -654,6 +656,17 @@
           <span class="text-sm">) × 0.5 圆整</span>
           <button onclick="Aoi.orders.applyGenRmb()" class="px-4 py-2 btn-primary text-sm font-bold rounded">生成</button>
           <button onclick="Aoi.orders.hideGenRmb()" class="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-bold rounded hover:bg-gray-300">取消</button>
+        </div>
+        <div id="reservoirAssignBox" class="hidden flex flex-wrap items-center gap-3 mb-4 border border-gray-200 bg-gray-50 rounded-lg p-3">
+          <span class="text-sm font-semibold">计入蓄水池：</span>
+          <select id="reservoirAssignPool" class="border border-gray-300 rounded px-2 py-1 text-sm"></select>
+          <select id="reservoirAssignSide" class="border border-gray-300 rounded px-2 py-1 text-sm">
+            <option value="A">侧 A（TA 帮我买 / 我欠）</option>
+            <option value="B">侧 B（我帮 TA 买 / TA 欠）</option>
+          </select>
+          <button onclick="Aoi.reservoir.confirmAssign()" class="px-4 py-2 btn-primary text-sm font-bold rounded">计入</button>
+          <button onclick="Aoi.reservoir.hideAssign()" class="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-bold rounded hover:bg-gray-300">取消</button>
+          <span id="reservoirAssignCount" class="text-xs text-gray-400">一单只入一池，已在池中的自动跳过；计入后金额自动跟随订单改价。</span>
         </div>
         <div id="orderSelStat" class="hidden flex flex-wrap items-center gap-2 mb-4 border border-gray-200 bg-gray-50 rounded-lg p-3 text-sm text-gray-600">
           <span id="orderSelStatBody" class="flex-1 min-w-0 leading-relaxed"></span>
@@ -1234,6 +1247,19 @@
           </div>
         </div>
       </div>
+
+      <!-- 蓄水池 · 互购净额台账（v3.25.0；仅管理端，工具组导航） -->
+      <div id="view-reservoir" data-view class="hidden grid gap-4 max-w-6xl">
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="text-lg font-bold">蓄水池 · 互购净额台账</h2>
+          <span class="text-xs text-gray-400 flex-1 min-w-0">和日本/韩国代购互买的挂账本：订单计入两侧（A=TA帮我买/我欠，B=我帮TA买/TA欠），按币种实时净额，攒到合适时机一次结清——缓解每笔转账的不便与手续费。仅管理端可见，数据存团队 blob。</span>
+          <button onclick="Aoi.reservoir.modalNewPool()" class="ml-auto px-4 py-2 btn-primary text-sm font-bold rounded whitespace-nowrap">＋ 新建蓄水池</button>
+        </div>
+        <div id="reservoirBody" class="grid gap-4"></div>
+        <div id="reservoirModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div id="reservoirModalBox" class="bg-white rounded-lg w-full max-w-lg p-6 max-h-[85vh] overflow-y-auto" onclick="event.stopPropagation()"></div>
+        </div>
+      </div>
     </main>
   </section>
 
@@ -1364,5 +1390,6 @@
   <script src="js/species-zh.js"></script>
   <script src="js/catalog-dict.js"></script>
   <script src="js/catalog.js"></script>
+  <script src="js/reservoir.js"></script>
 </body>
 </html>

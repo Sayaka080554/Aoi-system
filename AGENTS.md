@@ -50,16 +50,16 @@
 **v3.24.0 设置页「关于」选项卡已实施完成（2026-10-07，见 CHANGELOG v3.24.0）**：账户与设置页末尾新增可折叠「关于」卡片（当前版本/项目地址/作者署名含原作者秋洛 CC BY-NC-SA 4.0/近五版更新日志摘要+完整日志跳转）；数据源 `js/core.js` `Aoi.ABOUT`（发版随 CHANGELOG 同步更新）+ `Aoi.about.render/toggle`，`Aoi.nav` 进设置页自动刷新；测试 558→562 全绿；
 **v3.24.1 修复活动商品卡型号名错位（2026-10-07，见 CHANGELOG v3.24.1）**：v3.23.0 类型改输入框后与型号两个行内级 input 被 `.overflow-x-auto td` 的 `white-space: nowrap` 逼成并排溢出卡片——两输入框加 `block` 块级化；本地浏览器实测（debug 登录 + getBoundingClientRect + 截图）型号回到类型正下方卡内；
 线上排障、数据事故取证与回退锚点见 `docs/ITERATION_LOG.md`；**遗留项与线上操作清单见 `docs/STATUS.md`「当前状态速览」**。
-**蓄水池（互购净额台账）demo 已交付（2026-10-14，供演示拍板）**：和日本/韩国代购互买的挂账本——订单计入蓄水池两侧（A=TA帮我买/我欠，B=我帮TA买/TA欠），按币种实时净额与欠款方向，替代每笔直接转账（不便/手续费）；七项口径已拍板（**一池多对手方**：转账一人、订单多人多活动，按购买人小计 / **手工账同步新建订单**：「手工」标记+备注「蓄水池手工账」供排查 / **按订单自身字段分币种统计**：每币种外币合计+对应人民币合计，未转化该笔留空+橙色提醒 / **结算流水**：转账/换货抵账即时冲抵（方向=对方转我方冲抵TA欠 / 我方转对方冲抵我欠） / **结算即标记**：结算可勾选池内订单一并标记「已结算」——移出活水净额、行置灰锁定、订单库勾选框禁用免再勾选，删除结算流水自动取消标记，纯转账照旧只冲抵不标记 / **金额自动跟随订单改价**：entry 引用 orderId / **仅管理员可见**；导出对账单放二期）；`demo/reservoir-demo/`（纯静态零依赖离线可开，localStorage `rsd_demo_v1`，hash 深链 `#tab-lib`/`#detail-<池id>`，jsdom 冒烟 `tests/reservoir-demo.test.js` 19 例）；正式实现待拍板后 v3.25.0 立项 `docs/PLAN-RESERVOIR.md`（blob 新键 `d.reservoirs` 零 schema 改动）。
+**蓄水池（互购净额台账）demo 已交付（2026-10-14，供演示拍板）**：和日本/韩国代购互买的挂账本——订单计入蓄水池两侧（A=TA帮我买/我欠，B=我帮TA买/TA欠），按币种实时净额与欠款方向，替代每笔直接转账（不便/手续费）；七项口径已拍板（**一池多对手方**：转账一人、订单多人多活动，按购买人小计 / **手工账同步新建订单**：「手工」标记+备注「蓄水池手工账」供排查 / **按订单自身字段分币种统计**：每币种外币合计+对应人民币合计，未转化该笔留空+橙色提醒 / **结算流水**：转账/换货抵账即时冲抵（方向=对方转我方冲抵TA欠 / 我方转对方冲抵我欠） / **结算即标记**：结算可勾选池内订单一并标记「已结算」——移出活水净额、行置灰锁定、订单库勾选框禁用免再勾选，删除结算流水自动取消标记，纯转账照旧只冲抵不标记 / **金额自动跟随订单改价**：entry 引用 orderId / **仅管理员可见**；导出对账单放二期）；`demo/reservoir-demo/`（纯静态零依赖离线可开，localStorage `rsd_demo_v1`，hash 深链 `#tab-lib`/`#detail-<池id>`，jsdom 冒烟 `tests/reservoir-demo.test.js` 23 例）；**v3.25.0 已实装（2026-10-14，见 [docs/PLAN-RESERVOIR.md](docs/PLAN-RESERVOIR.md) 与 CHANGELOG）**——`js/reservoir.js`（第 24 模块 `window.Aoi.reservoir`）+ 工具组导航「蓄水池」+ 订单管理工具栏「计入蓄水池」（一单只入一池防重 + 30 秒撤销）；币种模型修正版随实装落地：一单一次计入（记账币种=外币原价或人民币）+ 币种桶净额 + 人民币视图 + **参考净额**（池内参考汇率统一折算人民币、明细内可编辑——跨币种池「到底谁欠谁多少」的单一答案，用户实测 USD 15/10 场景验算入测试）；结算方向公式顺带修正（demo v1 反转：记「对方→我方」曾会加倍净额）；测试 demo 23 例 + 正式 `tests/v3250-reservoir.test.js` 24 例，vitest 609 全绿。
 **下一轮计划（待批准）：见 [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md)** —— v3.3.0 审查后产出的「新功能 × 后端」双路线规划（B1–B7 后端 / F1–F8 功能 + 版本切分），批准后按其版本切分实施。
 
 ## 技术栈与架构速览
 
-- 前端：`index.html`（页面骨架 + 全部 screen）+ `js/` 下 22 个功能模块（挂全局 `window.Aoi` 命名空间，无模块打包）。
+- 前端：`index.html`（页面骨架 + 全部 screen）+ `js/` 下 26 个功能模块（挂全局 `window.Aoi` 命名空间，无模块打包）。
   核心模块：`core.js`（路由/通用）、`data.js`（Supabase 读写）、`auth.js`、`team.js`、`member.js`（团员端）、
   `orders.js`（订单/活动/批次/类型/商品主档）、`calc.js`（汇率换算）、`intl.js`（国际运费分摊）、`approval.js`（交费审批）、
   `shipping.js`、`warehouse.js`、`notify.js`（通知 + QQ 推送入口）、`bot.js`（OneBot v11 客户端）、`import.js`、
-  `limits.js`（限购计算器）、`stats.js`（复盘统计）、`image-upload.js`、`summary-export.js`（v3.7.0 汇总表导出）；
+  `limits.js`（限购计算器）、`stats.js`（复盘统计）、`image-upload.js`、`summary-export.js`（v3.7.0 汇总表导出）、`reservoir.js`（v3.25.0 蓄水池互购净额台账）；
   另有 `catalog.js`/`catalog-dict.js`/`species-zh.js` 为 F9 并行引入（待 v3.8.0 点亮）。
 - 存储：Supabase 三表（`teams` / `team_members` / `team_data`）；**全部业务数据存在 `team_data.data` 一个 JSONB blob 里**，
   schema 与 RPC 见 `supabase-schema.sql`（手工在 SQL Editor 执行，无版本化迁移）。
@@ -86,6 +86,7 @@
 | `docs/PLAN-F9-CATALOG-IMPORT.md` | F9 PCO 商品目录导入 + 补货监控：**主仓库侧已交付（2026-09-10，v3.8.0）**——粘贴导入+词典翻译+校对工作台+小程序模板导出；监控被 PCO 风控实测否决（自动化浏览器一律 Restricted access），载体待拍板 |
 | `docs/PLAN-F10-BOT-INTERACTION.md` | F10 QQ 机器人用户交互迭代：**已实施（2026-09-10，v3.6.3）**——QQ 绑定唯一性校验 / bot 解绑·我是谁·查单筛选·我的快递 / 网页端解绑与复制绑定指令，零 schema 改动，上线随 relay 真机部署批次 |
 | `docs/PLAN-F12-CEND-SHOP.md` | F12 C 端购物系统（买家自助商城）：**M0 已交付 + V1=v3.22.0 已实施（2026-09-30）**——拍板记录/登录调研/数据合并模型见 §九；部署动作 §9.4；遗留：账单核销工具/商城订单卡 |
+| `docs/PLAN-RESERVOIR.md` | 蓄水池（互购净额台账）：**v3.25.0 已实装（2026-10-14）**——七项拍板口径 / 币种模型（一单一次计入 + 参考净额）/ 结算即标记 / 数据模型（d.reservoirs 零 schema）与零干扰原则 |
 | `docs/STATUS.md` | 权威状态：已完成阶段、数据模型（blob 结构）、已知限制、**遗留项与线上操作清单** |
 | `CLAUDE.md` | QQ 机器人接入专项（NapCat / relay / 安全红线） |
 | `README.md` | 功能、部署、安全、项目结构 |

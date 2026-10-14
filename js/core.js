@@ -69,14 +69,16 @@ Aoi.nav = function (viewId) {
   if (viewId === 'view-buyers' && Aoi.orders) Aoi.orders.renderBuyers();
   // 进入 QQ 工单页时加载工单（F11-M13 工单处理台，独立视图；bot 未接入时静默降级）
   if (viewId === 'view-tickets' && Aoi.tickets) Aoi.tickets.load();
+  // 进入蓄水池页时重渲染池卡与明细（v3.25.0 互购净额台账）
+  if (viewId === 'view-reservoir' && Aoi.reservoir) Aoi.reservoir.renderAll();
   // 进入设置页时刷新「关于」选项卡的版本与更新日志（v3.24.0）
   if (viewId === 'view-settings' && Aoi.about) Aoi.about.render();
 };
 
 // —— 关于本项目（v3.24.0）：账户与设置「关于」选项卡的数据源，发版时随 CHANGELOG 同步更新 ——
 Aoi.ABOUT = {
-  version: 'v3.24.1',
-  buildDate: '2026-10-07',
+  version: 'v3.25.0',
+  buildDate: '2026-10-14',
   repo: 'https://github.com/zhengdaode/Aoi-system',
   site: 'https://zhengdaode.github.io/Aoi-system/',
   changelog: 'https://github.com/zhengdaode/Aoi-system/blob/main/CHANGELOG.md',
@@ -84,12 +86,12 @@ Aoi.ABOUT = {
   originalRepo: 'https://github.com/mossasari/Group-Buy-Management-System',
   maintainer: '郑 (zhengdaode)',
   log: [
+    'v3.25.0（2026-10-14）：蓄水池 · 互购净额台账——订单勾选计入 A/B 两侧、按币种净额 + 参考净额折算、结算即标记已结算、手工账同步新建订单',
     'v3.24.1（2026-10-07）：修复活动商品卡型号名错位（类型改为输入框后与型号并排溢出卡片）',
     'v3.24.0（2026-10-07）：账户与设置新增「关于」选项卡（作者 / 项目地址 / 版本与更新日志）',
     'v3.23.0（2026-10-07）：QQ 工单快捷导航 / 购买计划批量状态+恢复默认 / 活动商品随订单删改自动同步 / 商品卡制品类型可改 / UI polish',
     'v3.22.0（2026-09-30）：C 端商城 V1 上线——邮箱验证码登录 → 橱窗选购 → 购物车下单 → 唯一尾数支付 → 订单跟踪',
-    'v3.21.1（2026-09-26）：QQ 工单独立视图 + relay 根路由 ticketOp 协议（/onebot/* 透传实测不可用的修订）',
-    'v3.21.0（2026-09-26）：TypeSafe bot 意图端点 /bot-intent（F11-M9）'
+    'v3.21.1（2026-09-26）：QQ 工单独立视图 + relay 根路由 ticketOp 协议（/onebot/* 透传实测不可用的修订）'
   ]
 };
 

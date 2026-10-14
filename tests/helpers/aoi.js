@@ -45,6 +45,7 @@ const MODULES = [
   'js/species-zh.js',
   'js/catalog-dict.js',
   'js/catalog.js',
+  'js/reservoir.js',
   'js/shop.js'
 ];
 

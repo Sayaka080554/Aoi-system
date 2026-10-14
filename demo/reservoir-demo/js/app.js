@@ -114,14 +114,26 @@
     return map;
   }
 
-  /* ---------- 核心计算：按币种分组的两侧合计 + 结算冲抵 + 净额 ----------
-   * 活水 = 未结算订单；已结算订单（entry.settledAt）移出活水，仅在「已结算」列留档
-   * 外币合计 = Σ 该币 priceOrig×件数（缺失留空）；人民币合计 = Σ price×件数（缺失留空）
-   * 净额 = 活水A − 活水B + 对方转我方 − 我方转对方；正=我方欠对方，负=对方欠我方
-   * 关联订单的结算（entryIds 非空）不进公式——其效果已由「订单移出活水」体现，避免二次冲抵
+  /* ---------- 核心计算：按记账币种分桶 + 人民币视图 + 参考净额 ----------
+   * 一单一次计入：记账金额 = 外币原价（priceOrig×件数）或人民币（price×件数），二选一
+   * 币种分桶净额 = 活水A − 活水B + 结算冲抵（按原币各自的账，跨币种不可直接相减）
+   * 人民币视图 = 各侧已转化人民币合计（同一批账的折算参考，缺转化留空提醒）
+   * 参考净额 = 全部活水与纯转账按「参考汇率」统一折算人民币后的单一净额——「到底谁欠谁多少」的答案
+   * 已结算订单（entry.settledAt）移出活水；关联订单的结算（entryIds 非空）不进公式，避免二次冲抵
    */
+  var DEFAULT_RATES = { cny: 1, jpy: 0.048, krw: 0.0053, usd: 7 };
+
+  function poolRates(pool) {
+    var rates = {};
+    Object.keys(DEFAULT_RATES).forEach(function (c) {
+      rates[c] = (pool.rates && pool.rates[c] != null) ? pool.rates[c] : DEFAULT_RATES[c];
+    });
+    return rates;
+  }
+
   function computeSummary(pool) {
-    var ccys = {};   // c -> { a,b 全量, sa,sb 已结算 }
+    var ccys = {};   // 记账币种 -> { a,b 全量, sa,sb 已结算 }
+    var rmb = { a: 0, b: 0 };
     var missingRmb = [], missingOrig = [];
     var buyers = {};
     function bucket(c) { return ccys[c] || (ccys[c] = { a: 0, b: 0, sa: 0, sb: 0 }); }
@@ -132,16 +144,17 @@
       var done = !!e.settledAt;
       var side = e.side === 'B' ? 'b' : 'a';
       var sside = e.side === 'B' ? 'sb' : 'sa';
-      var bk = bucket(o.currency || 'cny');
-      var rc = isForeign(o) ? bucket('cny') : bk;
+      var bk = bucket(isForeign(o) ? o.currency : 'cny');
       if (isForeign(o)) {
         if (o.priceOrig != null) { bk[side] += o.priceOrig * qty; if (done) bk[sside] += o.priceOrig * qty; }
         else if (!done) missingOrig.push(o.id);
-        if (o.price != null) { rc[side] += o.price * qty; if (done) rc[sside] += o.price * qty; }
+        if (o.price != null) { if (!done) rmb[side] += o.price * qty; }
         else if (!done) missingRmb.push(o.id);
       } else {
-        if (o.price != null) { bk[side] += o.price * qty; if (done) bk[sside] += o.price * qty; }
-        else if (!done) missingRmb.push(o.id);
+        if (o.price != null) {
+          bk[side] += o.price * qty; if (done) bk[sside] += o.price * qty;
+          if (!done) rmb[side] += o.price * qty;
+        } else if (!done) missingRmb.push(o.id);
       }
       var b = buyers[o.buyer] || (buyers[o.buyer] = { entries: 0, qty: 0, origByCcy: {}, rmb: 0 });
       b.entries += 1; b.qty += qty;
@@ -150,7 +163,7 @@
       }
       if (o.price != null) b.rmb += o.price * qty;
     });
-    // 纯转账结算（未关联订单）照旧冲抵；关联订单的结算不进公式（效果=订单移出活水）
+    // 纯转账结算（未关联订单）按原币进对应桶的冲抵；关联订单的结算不进公式（效果=订单移出活水）
     var freeSt = {};
     (pool.settlements || []).forEach(function (s) {
       if (s.entryIds && s.entryIds.length) return;
@@ -172,6 +185,17 @@
         net: round2(activeA - activeB + st.them2us - st.us2them)
       };
     });
+    // 参考净额：活水（原币净额）与纯转账统一折算人民币
+    var rates = poolRates(pool);
+    var refNet = 0, hasAmount = false, unknownRate = [];
+    Object.keys(out.ccys).forEach(function (c) {
+      var v = out.ccys[c];
+      if (!rates[c]) { unknownRate.push(c); return; }
+      if (v.a || v.b) hasAmount = true;
+      refNet += (v.a - v.b + v.them2us - v.us2them) * rates[c];
+    });
+    out.rmbView = { a: round2(rmb.a), b: round2(rmb.b) };
+    out.refNet = { net: round2(refNet), rates: rates, unknownRate: unknownRate, hasAmount: hasAmount };
     return out;
   }
   function netDirection(net) {
@@ -302,6 +326,19 @@
       if ('priceOrig' in patch) o.priceOrig = numOrNull(patch.priceOrig);
       save(); renderAll();
       return o;
+    },
+
+    /* 参考汇率（仅折算参考净额，不改订单账本） */
+    setPoolRates: function (poolId, rates) {
+      var pool = poolById(poolId);
+      if (!pool) return null;
+      pool.rates = pool.rates || {};
+      Object.keys(rates || {}).forEach(function (c) {
+        var v = numOrNull(rates[c]);
+        if (v != null && v > 0) pool.rates[c] = v;
+      });
+      save(); renderAll();
+      return pool.rates;
     }
   };
 
@@ -311,6 +348,15 @@
   function netItemsHtml(pool) {
     var s = computeSummary(pool);
     var html = '';
+    // 参考净额（统一折算人民币的单一答案，账本仍以原币为准）
+    if (s.refNet.hasAmount) {
+      var rd = netDirection(s.refNet.net);
+      html += '<span class="net-item net-ref" title="按参考汇率把各币种活水统一折算成人民币，供「到底谁欠谁多少」决策；账本仍以原币为准，汇率可在明细里改">参考净额 ≈ <b>¥' +
+        esc(fmtN(Math.abs(s.refNet.net))) + '</b> · ' + rd.text + '</span>';
+    }
+    if (s.refNet.unknownRate.length) {
+      html += '<span class="warn-chip">⚠ ' + esc(s.refNet.unknownRate.map(ccyLabel).join('、')) + ' 缺参考汇率</span>';
+    }
     var keys = Object.keys(s.ccys).sort(function (a, b) {
       if (a === 'cny') return 1; if (b === 'cny') return -1; return a < b ? -1 : 1;
     });
@@ -368,7 +414,18 @@
     });
     html += '</tbody></table>';
 
-    // 按购买人小计（一池多对手方）
+    // 人民币视图 + 参考净额说明 + 参考汇率编辑
+    html += '<p class="lib-note">人民币视图（同一批账的折算参考，缺转化留空提醒）：侧A ¥' + esc(fmtN(s.rmbView.a)) +
+      ' / 侧B ¥' + esc(fmtN(s.rmbView.b)) +
+      (s.missingRmb.length ? '，⚠ ' + s.missingRmb.length + ' 笔未转人民币' : '') +
+      '。跨币种欠款不可直接相减——「到底谁欠谁多少」看上方参考净额。</p>';
+    var rateCcyList = Object.keys(s.refNet.rates).filter(function (c) { return c !== 'cny'; });
+    html += '<div class="settle-bar"><span>参考汇率（1 外币 = ? 人民币）：</span>' +
+      rateCcyList.map(function (c) {
+        return '<input class="rate-input" data-rate="' + c + '" type="number" step="0.0001" value="' + s.refNet.rates[c] + '"> ' + esc(ccyLabel(c));
+      }).join('　') +
+      '　<button class="btn btn-sm" data-act="rates-save" data-pool="' + p.id + '">保存汇率</button>' +
+      '<span class="lib-note">仅折算参考净额用，不改订单账本。</span></div>';
     var buyerKeys = Object.keys(s.buyers);
     if (buyerKeys.length) {
       html += '<div class="sec-title">按购买人小计（一池多对手方：转账一人，订单多人）</div><table class="tbl"><thead><tr>' +
@@ -693,6 +750,13 @@
       });
     }
     else if (act === 'settle-remove') { actions.removeSettlement(poolId, el.getAttribute('data-settle')); }
+    else if (act === 'rates-save') {
+      var inputs = document.querySelectorAll('#detail-' + poolId + ' .rate-input');
+      var rates = {};
+      inputs.forEach(function (inp) { rates[inp.getAttribute('data-rate')] = inp.value; });
+      actions.setPoolRates(poolId, rates);
+      toast('参考汇率已保存，参考净额已重算');
+    }
     else if (act === 'edit-price') { modalPrice(el.getAttribute('data-order')); }
     else if (act === 'price-save') {
       actions.updateOrderPrice(el.getAttribute('data-order'), {

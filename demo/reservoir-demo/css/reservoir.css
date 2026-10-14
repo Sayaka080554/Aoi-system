@@ -74,6 +74,11 @@ main { padding: 18px 0 40px; }
 .net-owe  { background: #fbe9e4; border-color: #f3d3ca; color: #b04a35; }   /* 我方欠对方 */
 .net-owed { background: #e8f0ea; border-color: #d3e3d8; color: #3f7358; }   /* 对方欠我方 */
 .net-zero { color: #8b8378; }
+.net-ref  { background: #fff; border: 1px dashed #d9604a; color: #b04a35; } /* 参考净额（统一折算） */
+.rate-input {
+  width: 90px; border: 1px solid #e2d8c6; border-radius: 8px; padding: 3px 8px;
+  font-size: .78rem; background: #fffdf9;
+}
 .warn-chip {
   padding: 4px 10px; border-radius: 999px; font-size: .72rem;
   background: #fef3c7; color: #b45309; border: 1px solid #fde68a;

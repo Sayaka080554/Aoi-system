@@ -28,9 +28,10 @@ function showLib() {
 }
 
 describe('渲染冒烟', () => {
-  it('两张池卡 + 净额方向文案', () => {
+  it('两张池卡 + 参考净额 + 双向欠款文案', () => {
     expect(w.document.querySelectorAll('.pool-card').length).toBe(2);
     const text = w.document.getElementById('poolList').textContent;
+    expect(text).toContain('参考净额');
     expect(text).toContain('我方欠对方');
     expect(text).toContain('对方欠我方');
   });
@@ -42,34 +43,39 @@ describe('渲染冒烟', () => {
   });
 });
 
-describe('净额计算（按订单自身字段分币种）', () => {
-  it('池1：日元净额 6,400 我欠（结算 5,000 冲抵）；人民币净额 −49 对方欠', () => {
+describe('净额计算（一单一次计入，按记账币种分桶）', () => {
+  it('池1：日元净额 6,400 我欠（结算 5,000 冲抵）；人民币桶仅原生人民币订单（−536 对方欠）', () => {
     const s = RD().computeSummary(RD().state.reservoirs[0]);
     expect(s.ccys.jpy.a).toBe(11400);
     expect(s.ccys.jpy.b).toBe(0);
-    expect(s.ccys.jpy.us2them).toBe(5000); // 我方 PayPal 转给对方，冲抵我欠
+    expect(s.ccys.jpy.us2them).toBe(5000);
     expect(s.ccys.jpy.net).toBe(6400);
-    expect(s.ccys.cny.a).toBe(532);   // o1 230 + o2 182 + o3 120
-    expect(s.ccys.cny.b).toBe(581);   // o7 316 + o9 220 + o10 45
-    expect(s.ccys.cny.net).toBe(-49);
+    expect(s.ccys.cny.a).toBe(0);      // 外币订单的人民币折算不再混入人民币桶
+    expect(s.ccys.cny.b).toBe(536);    // o7 316 + o9 220（原生人民币）
+    expect(s.ccys.cny.net).toBe(-536);
   });
 
-  it('池2：韩元 16,000 我欠；人民币 −10 对方欠', () => {
+  it('池2：韩元 16,000 我欠；人民币 −180 对方欠', () => {
     const s = RD().computeSummary(RD().state.reservoirs[1]);
     expect(s.ccys.krw.a).toBe(16000);
     expect(s.ccys.krw.net).toBe(16000);
-    expect(s.ccys.cny.a).toBe(170);   // o5 85×2 折算
-    expect(s.ccys.cny.b).toBe(180);   // o8 90×2
-    expect(s.ccys.cny.net).toBe(-10);
+    expect(s.ccys.cny.a).toBe(0);
+    expect(s.ccys.cny.b).toBe(180);
+    expect(s.ccys.cny.net).toBe(-180);
   });
 
-  it('未转化订单留空并提醒（未转人民币 o4 / 未转外币 o10）', () => {
+  it('人民币视图（外币订单取已转化价格，缺失留空提醒）', () => {
     const s = RD().computeSummary(RD().state.reservoirs[0]);
+    expect(s.rmbView.a).toBe(532);  // o1 230 + o2 182 + o3 120
+    expect(s.rmbView.b).toBe(581);  // o7 316 + o9 220 + o10 45
     expect(s.missingRmb).toContain('o4');
     expect(s.missingOrig).toContain('o10');
-    const text = w.document.getElementById('poolList').textContent;
-    expect(text).toContain('未转人民币');
-    expect(text).toContain('未转外币');
+  });
+
+  it('参考净额：各币种净额按参考汇率统一折算人民币（池1 −228.8 对方欠）', () => {
+    const s = RD().computeSummary(RD().state.reservoirs[0]);
+    // 6400 日元 × 0.048 = 307.2（我欠）；−536 人民币（对方欠）→ 对方欠 ≈ ¥228.8
+    expect(s.refNet.net).toBe(-228.8);
   });
 
   it('按购买人小计（一池多对手方）', () => {
@@ -78,6 +84,45 @@ describe('净额计算（按订单自身字段分币种）', () => {
     expect(s.buyers['佐藤'].rmb).toBe(948);              // o1 230 + o2 182 + o7 316 + o9 220（含外币折算）
     expect(s.buyers['田中'].origByCcy.jpy).toBe(5200);   // o3 2500 + o4 2700
     expect(s.buyers['田中'].rmb).toBe(165);              // o3 120 + o10 45
+  });
+});
+
+describe('跨币种场景（用户截图：USD 15 vs 10，两边各转一种货币）', () => {
+  it('美元桶净额 5 刀对方欠 + 人民币视图单侧 + 参考净额 ≈¥35（一单一次计入不重复）', () => {
+    const p = RD().actions.createPool('美国线 · 约翰结算', 'TA 帮我买（我欠）', '我帮 TA 买（TA 欠）');
+    RD().actions.createManual(p.id, 'B', { activity: '美国代购', type: '吧唧', model: 'USD15', buyer: '约翰', currency: 'usd', priceOrig: '15', price: '105', count: '1', note: '' });
+    RD().actions.createManual(p.id, 'A', { activity: '美国代购', type: '色纸', model: 'USD10', buyer: '约翰', currency: 'usd', priceOrig: '10', price: '', count: '1', note: '' });
+    const s = RD().computeSummary(p);
+    expect(s.ccys.usd.a).toBe(10);
+    expect(s.ccys.usd.b).toBe(15);
+    expect(s.ccys.usd.net).toBe(-5);       // 对方欠 5 刀（原币净额）
+    expect(s.rmbView.a).toBe(0);           // TA 没换人民币 → 留空
+    expect(s.rmbView.b).toBe(105);         // 我换成了人民币
+    expect(s.missingRmb.length).toBe(1);
+    expect(s.refNet.net).toBe(-35);        // (10−15)×7 → 对方欠 ≈¥35（参考汇率 usd=7）
+    const text = w.document.getElementById('poolList').textContent;
+    expect(text).toContain('参考净额');
+  });
+
+  it('TA 侧改记日元 1400（7/140=0.05）参考净额不变', () => {
+    const p = RD().actions.createPool('美国线 · 约翰结算', 'TA 帮我买（我欠）', '我帮 TA 买（TA 欠）');
+    RD().actions.createManual(p.id, 'B', { activity: '美国代购', type: '吧唧', model: 'USD15', buyer: '约翰', currency: 'usd', priceOrig: '15', price: '105', count: '1', note: '' });
+    RD().actions.createManual(p.id, 'A', { activity: '美国代购', type: '色纸', model: 'JPY1400', buyer: '约翰', currency: 'jpy', priceOrig: '1400', price: '', count: '1', note: '' });
+    const s = RD().computeSummary(p);
+    expect(s.ccys.usd.net).toBe(-15);      // 美元桶只剩我方 15
+    expect(s.ccys.jpy.net).toBe(1400);     // 日元桶只剩 TA 1400（我欠）
+    expect(s.refNet.net).toBe(-37.8); // 我帮TA买15刀（对方欠105）vs TA帮我买1400円（我欠67.2）→ 对方欠 ≈¥37.8
+    RD().actions.setPoolRates(p.id, { jpy: 7 / 140 });
+    expect(RD().computeSummary(p).refNet.net).toBe(-35); // 按 TA 的换算率折算 → 对方欠 ≈¥35
+  });
+
+  it('参考汇率可编辑，改后参考净额重算', () => {
+    const p = RD().actions.createPool('美国线', 'TA 帮我买（我欠）', '我帮 TA 买（TA 欠）');
+    RD().actions.createManual(p.id, 'B', { activity: '美国代购', type: '吧唧', model: 'USD10', buyer: '约翰', currency: 'usd', priceOrig: '10', price: '', count: '1', note: '' });
+    expect(RD().computeSummary(p).refNet.net).toBe(-70);   // 10×7
+    RD().actions.setPoolRates(p.id, { usd: 7.3 });
+    expect(RD().computeSummary(p).refNet.net).toBe(-73);   // 10×7.3
+    expect(RD().state.reservoirs.find((x) => x.id === p.id).rates.usd).toBe(7.3);
   });
 });
 
@@ -92,8 +137,8 @@ describe('计入 / 防重 / 改侧 / 移除', () => {
   it('改侧与移除即时生效', () => {
     RD().actions.moveEntry('r1', 'e9'); // o9 侧B → 侧A
     let s = RD().computeSummary(RD().state.reservoirs[0]);
-    expect(s.ccys.cny.a).toBe(752);   // 532 + 220
-    expect(s.ccys.cny.b).toBe(361);   // 581 − 220
+    expect(s.ccys.cny.a).toBe(220);   // 人民币桶（原生）：0 + 220
+    expect(s.ccys.cny.b).toBe(316);   // 536 − 220
     RD().actions.removeEntry('r1', 'e4'); // 移除未转人民币那笔
     s = RD().computeSummary(RD().state.reservoirs[0]);
     expect(s.ccys.jpy.a).toBe(8700);
@@ -128,11 +173,11 @@ describe('结算流水', () => {
     expect(s.ccys.krw.net).toBe(16000);
   });
 
-  it('对方转我方冲抵 TA 欠（方向语义：对方欠 ¥49 时收 49 应两清）', () => {
-    // r1 人民币活水：a=532, b=581 → 对方欠我方 49；记对方转我方 49 后应归零
-    RD().actions.addSettlement('r1', { direction: 'them2us', currency: 'cny', amount: 49, date: '2026-10-14', note: '对方转账' });
+  it('方向语义：对方把欠的人民币转清后参考净额归零', () => {
+    // 池1 参考净额 −228.8（对方欠）；对方转我 228.8 人民币后应两清
+    RD().actions.addSettlement('r1', { direction: 'them2us', currency: 'cny', amount: 228.8, date: '2026-10-14', note: '对方转账' });
     const s = RD().computeSummary(RD().state.reservoirs[0]);
-    expect(s.ccys.cny.net).toBe(0);
+    expect(s.refNet.net).toBe(0);
   });
 });
 
@@ -151,7 +196,8 @@ describe('结算标记订单', () => {
     const s = RD().computeSummary(r2);
     expect(s.ccys.cny.b).toBe(0);            // 活水移出
     expect(s.ccys.cny.settledB).toBe(180);   // 已结算留档
-    expect(s.ccys.cny.net).toBe(170);        // 170 − 0；关联结算不重复冲抵
+    expect(s.ccys.cny.net).toBe(0);
+    expect(s.refNet.net).toBe(84.8);         // 只剩韩元 16000×0.0053
   });
 
   it('删除关联结算 → 自动取消标记，金额回到活水', () => {
@@ -162,7 +208,7 @@ describe('结算标记订单', () => {
     expect(e8.settledAt).toBeUndefined();
     const s = RD().computeSummary(r2);
     expect(s.ccys.cny.b).toBe(180);
-    expect(s.ccys.cny.net).toBe(-10);
+    expect(s.ccys.cny.net).toBe(-180);
   });
 
   it('已结算条目锁定：改侧/移除无效', () => {
@@ -193,7 +239,7 @@ describe('结算标记订单', () => {
     expect(r2.settlements[0].entryIds).toEqual(['e8']);
     expect(r2.entries.find((x) => x.id === 'e8').settledAt).toBeTruthy();
     const s = RD().computeSummary(r2);
-    expect(s.ccys.cny.net).toBe(170);
+    expect(s.ccys.cny.net).toBe(0);
   });
 });
 
@@ -201,8 +247,9 @@ describe('金额自动跟随订单改价', () => {
   it('改 o9 人民币价 220→198，池合计与净额随之变化', () => {
     RD().actions.updateOrderPrice('o9', { price: '198' });
     const s = RD().computeSummary(RD().state.reservoirs[0]);
-    expect(s.ccys.cny.b).toBe(559);   // o7 316 + o9 198 + o10 45
-    expect(s.ccys.cny.net).toBe(-27); // 532 − 559
+    expect(s.ccys.cny.b).toBe(514);   // o7 316 + o9 198
+    expect(s.ccys.cny.net).toBe(-514);
+    expect(s.rmbView.b).toBe(559);    // o7 316 + o9 198 + o10 45
   });
 });
 

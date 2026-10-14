@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>蓄水池 · 互购净额台账（演示）</title>
+<link rel="stylesheet" href="css/reservoir.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <div>
+      <h1>蓄水池 <span class="sub">互购净额台账</span></h1>
+      <p class="tagline">和日本/韩国代购互买的挂账本：订单计入两侧水池，实时看净额，攒到合适时机一次结清——缓解「每笔都转账」的不便与手续费。</p>
+    </div>
+    <div class="topbar-actions">
+      <span class="chip chip-admin">🔒 仅管理员可见（团员端不暴露）</span>
+      <span class="chip chip-demo">演示版 · 数据为 mock</span>
+      <button class="btn btn-ghost" id="btnReset">重置演示数据</button>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs">
+  <div class="wrap tabs-in">
+    <button class="tab active" data-act="tab" data-tab="pools">蓄水池</button>
+    <button class="tab" data-act="tab" data-tab="lib">订单库</button>
+    <span class="tabs-spacer"></span>
+    <button class="btn btn-primary" data-act="new-pool">＋ 新建蓄水池</button>
+  </div>
+</nav>
+
+<main class="wrap">
+  <!-- 蓄水池列表 -->
+  <section id="tab-pools">
+    <div id="poolList"></div>
+    <p class="foot-hint">正式版将实现为管理端「工具 → 蓄水池」（js/reservoir.js，v3.25.0 立项）；
+    金额自动跟随订单管理现价；本页所有数据为写死 mock，改动存浏览器 localStorage。</p>
+  </section>
+
+  <!-- 订单库（对应正式版的「订单管理勾选计入」入口 + 手工账新建订单的排查视图） -->
+  <section id="tab-lib" class="hidden">
+    <div class="card lib-card">
+      <div class="lib-toolbar">
+        <input id="libSearch" type="search" placeholder="搜索 活动 / 类型 / 型号 / 购买人">
+        <select id="libPoolSel"></select>
+        <select id="libSideSel">
+          <option value="A">计入侧 A</option>
+          <option value="B">计入侧 B</option>
+        </select>
+        <button class="btn btn-primary" data-act="assign">计入蓄水池</button>
+        <button class="btn" data-act="lib-price">改价（演示跟随）</button>
+      </div>
+      <div class="lib-note">正式版入口 = 订单管理表格勾选 + 工具栏「计入蓄水池…」（30 秒撤销）。
+      勾选后选池子与侧向点「计入」；已在池中的订单自动跳过。手工账会在这里以「手工」标记出现，用于排查。</div>
+      <div id="libBody"></div>
+    </div>
+  </section>
+</main>
+
+<!-- 弹层 -->
+<div id="modalRoot" class="hidden">
+  <div class="mask" data-act="modal-close"></div>
+  <div class="modal" id="modalBox"></div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

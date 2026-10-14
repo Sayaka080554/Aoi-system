@@ -47,7 +47,7 @@ describe('净额计算（按订单自身字段分币种）', () => {
     const s = RD().computeSummary(RD().state.reservoirs[0]);
     expect(s.ccys.jpy.a).toBe(11400);
     expect(s.ccys.jpy.b).toBe(0);
-    expect(s.ccys.jpy.them2us).toBe(5000);
+    expect(s.ccys.jpy.us2them).toBe(5000); // 我方 PayPal 转给对方，冲抵我欠
     expect(s.ccys.jpy.net).toBe(6400);
     expect(s.ccys.cny.a).toBe(532);   // o1 230 + o2 182 + o3 120
     expect(s.ccys.cny.b).toBe(581);   // o7 316 + o9 220 + o10 45
@@ -117,15 +117,83 @@ describe('手工账同步新建订单', () => {
 });
 
 describe('结算流水', () => {
-  it('记一笔结算即时冲抵净额，可删除', () => {
+  it('记一笔纯转账结算即时冲抵净额，可删除', () => {
     RD().actions.addSettlement('r2', { direction: 'us2them', currency: 'krw', amount: 1000, date: '2026-10-14', note: '换货抵账' });
     let s = RD().computeSummary(RD().state.reservoirs[1]);
     expect(s.ccys.krw.us2them).toBe(1000);
-    expect(s.ccys.krw.net).toBe(17000);
+    expect(s.ccys.krw.net).toBe(15000); // 我欠 16,000 − 我方转对方 1,000
     const sid = RD().state.reservoirs[1].settlements[0].id;
     RD().actions.removeSettlement('r2', sid);
     s = RD().computeSummary(RD().state.reservoirs[1]);
     expect(s.ccys.krw.net).toBe(16000);
+  });
+
+  it('对方转我方冲抵 TA 欠（方向语义：对方欠 ¥49 时收 49 应两清）', () => {
+    // r1 人民币活水：a=532, b=581 → 对方欠我方 49；记对方转我方 49 后应归零
+    RD().actions.addSettlement('r1', { direction: 'them2us', currency: 'cny', amount: 49, date: '2026-10-14', note: '对方转账' });
+    const s = RD().computeSummary(RD().state.reservoirs[0]);
+    expect(s.ccys.cny.net).toBe(0);
+  });
+});
+
+describe('结算标记订单', () => {
+  const settleE8 = () => RD().actions.addSettlement('r2', {
+    direction: 'them2us', currency: 'cny', amount: 180, date: '2026-10-14', note: '结清', entryIds: ['e8']
+  });
+
+  it('勾选订单结算：标记已结算并移出活水（关联结算不重复进公式）', () => {
+    const rec = settleE8();
+    expect(rec.entryIds).toEqual(['e8']);
+    const r2 = RD().state.reservoirs[1];
+    const e8 = r2.entries.find((x) => x.id === 'e8');
+    expect(e8.settledAt).toBe('2026-10-14');
+    expect(e8.settlementId).toBe(rec.id);
+    const s = RD().computeSummary(r2);
+    expect(s.ccys.cny.b).toBe(0);            // 活水移出
+    expect(s.ccys.cny.settledB).toBe(180);   // 已结算留档
+    expect(s.ccys.cny.net).toBe(170);        // 170 − 0；关联结算不重复冲抵
+  });
+
+  it('删除关联结算 → 自动取消标记，金额回到活水', () => {
+    const rec = settleE8();
+    RD().actions.removeSettlement('r2', rec.id);
+    const r2 = RD().state.reservoirs[1];
+    const e8 = r2.entries.find((x) => x.id === 'e8');
+    expect(e8.settledAt).toBeUndefined();
+    const s = RD().computeSummary(r2);
+    expect(s.ccys.cny.b).toBe(180);
+    expect(s.ccys.cny.net).toBe(-10);
+  });
+
+  it('已结算条目锁定：改侧/移除无效', () => {
+    settleE8();
+    expect(RD().actions.moveEntry('r2', 'e8')).toBeNull();
+    RD().actions.removeEntry('r2', 'e8');
+    expect(RD().state.reservoirs[1].entries.length).toBe(2);
+  });
+
+  it('订单库：已结算订单带标记且勾选框禁用（无需再勾选）', () => {
+    settleE8();
+    showLib();
+    const cb = w.document.querySelector('#libBody input[data-id="o8"]');
+    expect(cb.disabled).toBe(true);
+    expect(w.document.getElementById('libBody').textContent).toContain('已结算');
+  });
+
+  it('明细勾选 → 结算勾选订单 → 确定（DOM 全链路，预填方向/金额）', () => {
+    w.document.querySelector('[data-act="toggle-detail"][data-pool="r2"]').click();
+    w.document.querySelector('#detail-r2 input[data-entry="e8"]').checked = true;
+    w.document.querySelector('[data-act="settle-checked"][data-pool="r2"]').click();
+    expect(w.document.getElementById('sDirection').value).toBe('them2us'); // e8 在 B 侧（TA欠）→ 对方转我方
+    expect(w.document.getElementById('sAmount').value).toBe('180');
+    expect(w.document.getElementById('sCurrency').value).toBe('cny');
+    w.document.getElementById('sNote').value = '微信收款码';
+    w.document.querySelector('[data-act="settle-save"]').click();
+    const r2 = RD().state.reservoirs[1];
+    expect(r2.settlements[0].entryIds).toEqual(['e8']);
+    expect(r2.entries.find((x) => x.id === 'e8').settledAt).toBeTruthy();
+    const s = RD().computeSummary(r2);
+    expect(s.ccys.cny.net).toBe(170);
   });
 });
 

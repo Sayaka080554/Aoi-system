@@ -100,6 +100,16 @@ main { padding: 18px 0 40px; }
 }
 .badge-manual { background: #e8e4f4; color: #66519e; }
 .badge-pool { background: #fbe9e4; color: #b04a35; }
+.badge-settled { background: #e8f0ea; color: #3f7358; }
+
+/* 结算标记：已结算行置灰 + 结算工具条 */
+.row-settled td { background: #fafaf6; color: #a89e8f; }
+.row-settled td b, .row-settled td .num { color: #a89e8f; }
+.settle-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 14px 0 2px; padding: 8px 12px;
+  background: #faf6ee; border: 1px dashed #e2d8c6; border-radius: 10px;
+}
 
 .sec-title { margin: 18px 0 2px; font-size: .8rem; font-weight: 700; color: #6b6155; }
 .sec-title:first-child { margin-top: 8px; }

@@ -41,7 +41,7 @@
             { id: 'e10', orderId: 'o10', side: 'B', addedAt: '2026-10-01' }
           ],
           settlements: [
-            { id: 's1', direction: 'them2us', currency: 'jpy', amount: 5000, date: '2026-09-30', note: 'PayPal 转账' }
+            { id: 's1', direction: 'us2them', currency: 'jpy', amount: 5000, date: '2026-09-30', note: 'PayPal 转账' }
           ]
         },
         {
@@ -108,33 +108,40 @@
     var map = {};
     state.reservoirs.forEach(function (p) {
       p.entries.forEach(function (e) {
-        if (!map[e.orderId]) map[e.orderId] = p.name + ' · 侧' + e.side;
+        if (!map[e.orderId]) map[e.orderId] = { label: p.name + ' · 侧' + e.side, settled: !!e.settledAt };
       });
     });
     return map;
   }
 
   /* ---------- 核心计算：按币种分组的两侧合计 + 结算冲抵 + 净额 ----------
+   * 活水 = 未结算订单；已结算订单（entry.settledAt）移出活水，仅在「已结算」列留档
    * 外币合计 = Σ 该币 priceOrig×件数（缺失留空）；人民币合计 = Σ price×件数（缺失留空）
-   * 净额 = 侧A − 侧B − 对方转我方 + 我方转对方；正=我方欠对方，负=对方欠我方
+   * 净额 = 活水A − 活水B + 对方转我方 − 我方转对方；正=我方欠对方，负=对方欠我方
+   * 关联订单的结算（entryIds 非空）不进公式——其效果已由「订单移出活水」体现，避免二次冲抵
    */
   function computeSummary(pool) {
-    var ccys = {};
+    var ccys = {};   // c -> { a,b 全量, sa,sb 已结算 }
     var missingRmb = [], missingOrig = [];
     var buyers = {};
-    function bucket(c) { return ccys[c] || (ccys[c] = { a: 0, b: 0 }); }
+    function bucket(c) { return ccys[c] || (ccys[c] = { a: 0, b: 0, sa: 0, sb: 0 }); }
     pool.entries.forEach(function (e) {
       var o = orderById(e.orderId);
       if (!o) return; // 正式版：订单已删时保留快照灰显；demo mock 不删单
       var qty = o.count || 1;
+      var done = !!e.settledAt;
       var side = e.side === 'B' ? 'b' : 'a';
+      var sside = e.side === 'B' ? 'sb' : 'sa';
       var bk = bucket(o.currency || 'cny');
       var rc = isForeign(o) ? bucket('cny') : bk;
       if (isForeign(o)) {
-        if (o.priceOrig != null) bk[side] += o.priceOrig * qty; else missingOrig.push(o.id);
-        if (o.price != null) rc[side] += o.price * qty; else missingRmb.push(o.id);
+        if (o.priceOrig != null) { bk[side] += o.priceOrig * qty; if (done) bk[sside] += o.priceOrig * qty; }
+        else if (!done) missingOrig.push(o.id);
+        if (o.price != null) { rc[side] += o.price * qty; if (done) rc[sside] += o.price * qty; }
+        else if (!done) missingRmb.push(o.id);
       } else {
-        if (o.price != null) bk[side] += o.price * qty; else missingRmb.push(o.id);
+        if (o.price != null) { bk[side] += o.price * qty; if (done) bk[sside] += o.price * qty; }
+        else if (!done) missingRmb.push(o.id);
       }
       var b = buyers[o.buyer] || (buyers[o.buyer] = { entries: 0, qty: 0, origByCcy: {}, rmb: 0 });
       b.entries += 1; b.qty += qty;
@@ -143,16 +150,26 @@
       }
       if (o.price != null) b.rmb += o.price * qty;
     });
+    // 纯转账结算（未关联订单）照旧冲抵；关联订单的结算不进公式（效果=订单移出活水）
+    var freeSt = {};
+    (pool.settlements || []).forEach(function (s) {
+      if (s.entryIds && s.entryIds.length) return;
+      var c = s.currency || 'cny';
+      var st = freeSt[c] || (freeSt[c] = { them2us: 0, us2them: 0 });
+      if (s.direction === 'us2them') st.us2them += (s.amount || 0); else st.them2us += (s.amount || 0);
+      bucket(c);
+    });
     var out = { ccys: {}, missingRmb: missingRmb, missingOrig: missingOrig, buyers: buyers };
     Object.keys(ccys).forEach(function (c) {
       var t = ccys[c];
-      var st = { them2us: 0, us2them: 0 };
-      (pool.settlements || []).forEach(function (s) { if (s.currency === c) st[s.direction] += (s.amount || 0); });
+      var st = freeSt[c] || { them2us: 0, us2them: 0 };
+      var activeA = round2(t.a - t.sa), activeB = round2(t.b - t.sb);
       out.ccys[c] = {
-        a: round2(t.a), b: round2(t.b),
+        a: activeA, b: activeB,
+        settledA: round2(t.sa), settledB: round2(t.sb),
         them2us: round2(st.them2us), us2them: round2(st.us2them),
         offset: round2(st.them2us - st.us2them),
-        net: round2(t.a - t.b - st.them2us + st.us2them)
+        net: round2(activeA - activeB + st.them2us - st.us2them)
       };
     });
     return out;
@@ -201,7 +218,7 @@
     moveEntry: function (poolId, entryId) {
       var pool = poolById(poolId);
       var e = pool && pool.entries.find(function (x) { return x.id === entryId; });
-      if (!e) return null;
+      if (!e || e.settledAt) return null; // 已结算订单锁定侧向
       e.side = e.side === 'A' ? 'B' : 'A';
       save(); renderAll();
       return e;
@@ -209,6 +226,8 @@
     removeEntry: function (poolId, entryId) {
       var pool = poolById(poolId);
       if (!pool) return;
+      var target = pool.entries.find(function (x) { return x.id === entryId; });
+      if (!target || target.settledAt) return; // 已结算订单不可直接移除（先删关联结算流水）
       pool.entries = pool.entries.filter(function (x) { return x.id !== entryId; });
       save(); renderAll();
     },
@@ -234,11 +253,16 @@
       return o;
     },
 
-    /* 结算流水：them2us=对方转我方（减少我欠），us2them=我方转对方（增加我欠） */
+    /* 结算流水：them2us=对方转我方（冲抵TA欠），us2them=我方转对方（冲抵我欠）。
+     * s.entryIds 非空时：关联的池内条目标记「已结算」（settledAt/settlementId），金额移出活水净额；
+     * 删除该流水时自动取消标记（见 removeSettlement）。 */
     addSettlement: function (poolId, s) {
       var pool = poolById(poolId);
       var amount = numOrNull(s.amount);
       if (!pool || amount == null || amount <= 0) return null;
+      var entryIds = Array.isArray(s.entryIds) ? s.entryIds.filter(function (id) {
+        return pool.entries.some(function (e) { return e.id === id && !e.settledAt; });
+      }) : [];
       var rec = {
         id: genId(),
         direction: s.direction === 'us2them' ? 'us2them' : 'them2us',
@@ -247,6 +271,14 @@
         date: s.date || today(),
         note: s.note || ''
       };
+      if (entryIds.length) {
+        rec.entryIds = entryIds;
+        entryIds.forEach(function (id) {
+          var e = pool.entries.find(function (x) { return x.id === id; });
+          e.settledAt = rec.date;
+          e.settlementId = rec.id;
+        });
+      }
       pool.settlements.push(rec);
       save(); renderAll();
       return rec;
@@ -255,6 +287,10 @@
       var pool = poolById(poolId);
       if (!pool) return;
       pool.settlements = pool.settlements.filter(function (x) { return x.id !== settleId; });
+      // 取消该流水关联订单的「已结算」标记（金额回到活水）
+      pool.entries.forEach(function (e) {
+        if (e.settlementId === settleId) { delete e.settledAt; delete e.settlementId; }
+      });
       save(); renderAll();
     },
 
@@ -279,9 +315,13 @@
       if (a === 'cny') return 1; if (b === 'cny') return -1; return a < b ? -1 : 1;
     });
     keys.forEach(function (c) {
-      var d = netDirection(s.ccys[c].net);
-      html += '<span class="net-item ' + d.cls + '">' + esc(ccyLabel(c)) + ' · ' + d.text +
-        '<b>' + esc(fmtMoney(c, Math.abs(s.ccys[c].net))) + '</b></span>';
+      var v = s.ccys[c];
+      var cleared = v.a === 0 && v.b === 0 && (v.settledA || v.settledB);
+      var dir = netDirection(v.net);
+      var cls = cleared ? 'net-zero' : dir.cls;
+      var label = cleared ? '已结清' : dir.text;
+      var amount = cleared ? '' : '<b>' + esc(fmtMoney(c, Math.abs(v.net))) + '</b>';
+      html += '<span class="net-item ' + cls + '">' + esc(ccyLabel(c)) + ' · ' + label + amount + '</span>';
     });
     if (s.missingRmb.length) html += '<span class="warn-chip" data-act="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingRmb.length + ' 笔未转人民币</span>';
     if (s.missingOrig.length) html += '<span class="warn-chip" data-act="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingOrig.length + ' 笔未转外币</span>';
@@ -314,8 +354,8 @@
     var html = '';
 
     // 币种汇总
-    html += '<div class="sec-title">币种汇总（净额 = 侧A − 侧B − 结算冲抵）</div><table class="tbl"><thead><tr>' +
-      '<th>币种</th><th class="num">侧A 合计</th><th class="num">侧B 合计</th><th class="num">结算冲抵</th><th class="num">净额</th><th>方向</th></tr></thead><tbody>';
+    html += '<div class="sec-title">币种汇总（活水 = 未结算部分；净额 = 活水A − 活水B + 结算冲抵）</div><table class="tbl"><thead><tr>' +
+      '<th>币种</th><th class="num">侧A 活水</th><th class="num">侧B 活水</th><th class="num">结算冲抵</th><th class="num">净额</th><th>方向</th><th class="num">已结算</th></tr></thead><tbody>';
     Object.keys(s.ccys).forEach(function (c) {
       var v = s.ccys[c], d = netDirection(v.net);
       html += '<tr><td>' + esc(ccyLabel(c)) + '</td>' +
@@ -323,7 +363,8 @@
         '<td class="num">' + esc(fmtMoney(c, v.b)) + '</td>' +
         '<td class="num">' + (v.offset ? esc(fmtMoney(c, v.offset)) : '—') + '</td>' +
         '<td class="num"><b>' + esc(fmtMoney(c, v.net)) + '</b></td>' +
-        '<td>' + d.text + '</td></tr>';
+        '<td>' + d.text + '</td>' +
+        '<td class="num">' + ((v.settledA || v.settledB) ? esc(fmtMoney(c, v.settledA)) + ' / ' + esc(fmtMoney(c, v.settledB)) : '—') + '</td></tr>';
     });
     html += '</tbody></table>';
 
@@ -342,16 +383,20 @@
       html += '</tbody></table>';
     }
 
+    html += '<div class="settle-bar"><span>勾选下方未结算订单：</span>' +
+      '<button class="btn btn-sm btn-primary" data-act="settle-checked" data-pool="' + p.id + '">结算勾选订单（标记已结算）</button>' +
+      '<span class="lib-note">被结算订单移出活水净额并标记「已结算」，之后无需再勾选；上方「记一笔结算」为纯转账，不标订单。</span></div>';
     html += sideTableHtml(p, 'A', s) + sideTableHtml(p, 'B', s);
 
     // 结算流水
     html += '<div class="sec-title">结算流水</div>';
     if (p.settlements.length) {
-      html += '<table class="tbl"><thead><tr><th>日期</th><th>方向</th><th>币种</th><th class="num">金额</th><th>备注</th><th class="ops">操作</th></tr></thead><tbody>';
+      html += '<table class="tbl"><thead><tr><th>日期</th><th>方向</th><th>币种</th><th class="num">金额</th><th>备注</th><th>关联</th><th class="ops">操作</th></tr></thead><tbody>';
       p.settlements.forEach(function (st) {
         html += '<tr><td>' + esc(st.date) + '</td><td>' + (st.direction === 'them2us' ? '对方 → 我方' : '我方 → 对方') + '</td>' +
           '<td>' + esc(ccyLabel(st.currency)) + '</td><td class="num">' + esc(fmtMoney(st.currency, st.amount)) + '</td>' +
           '<td>' + esc(st.note || '—') + '</td>' +
+          '<td>' + (st.entryIds && st.entryIds.length ? '<span class="badge badge-settled">' + st.entryIds.length + ' 笔订单</span>' : '—') + '</td>' +
           '<td class="ops"><button class="btn btn-sm btn-danger" data-act="settle-remove" data-pool="' + p.id + '" data-settle="' + st.id + '">删除</button></td></tr>';
       });
       html += '</tbody></table>';
@@ -366,30 +411,36 @@
     var html = '<div class="sec-title">侧' + side + ' 明细：' + esc(side === 'A' ? p.sideA : p.sideB) + '</div>';
     if (!rows.length) return html + '<p class="lib-note">侧' + side + '暂无订单。</p>';
     html += '<table class="tbl"><thead><tr>' +
-      '<th>活动</th><th>类型 / 型号</th><th>购买人</th><th class="num">件数</th><th class="num">外币原价</th><th class="num">人民币</th><th>计入日</th><th class="ops">操作</th></tr></thead><tbody>';
+      '<th>选</th><th>活动</th><th>类型 / 型号</th><th>购买人</th><th class="num">件数</th><th class="num">外币原价</th><th class="num">人民币</th><th>计入日</th><th class="ops">状态 / 操作</th></tr></thead><tbody>';
     rows.forEach(function (e) {
       var o = orderById(e.orderId);
       if (!o) return;
       var qty = o.count || 1;
-      var warn = s.missingRmb.indexOf(o.id) >= 0 || s.missingOrig.indexOf(o.id) >= 0;
+      var done = !!e.settledAt;
+      var warn = !done && (s.missingRmb.indexOf(o.id) >= 0 || s.missingOrig.indexOf(o.id) >= 0);
       var origCell, rmbCell;
       if (isForeign(o)) {
         origCell = o.priceOrig != null ? esc(fmtMoney(o.currency, o.priceOrig * qty))
-          : '<span class="miss">—</span><span class="mini-warn">未转外币</span>';
+          : '<span class="miss">—</span>' + (done ? '' : '<span class="mini-warn">未转外币</span>');
         rmbCell = o.price != null ? '¥' + esc(fmtN(round2(o.price * qty)))
-          : '<span class="miss">—</span><span class="mini-warn">未转¥</span>';
+          : '<span class="miss">—</span>' + (done ? '' : '<span class="mini-warn">未转¥</span>');
       } else {
         origCell = '<span class="miss">—</span>';
         rmbCell = o.price != null ? '¥' + esc(fmtN(round2(o.price * qty)))
-          : '<span class="miss">—</span><span class="mini-warn">未转¥</span>';
+          : '<span class="miss">—</span>' + (done ? '' : '<span class="mini-warn">未转¥</span>');
       }
-      html += '<tr' + (warn ? ' class="row-warn"' : '') + '><td>' + esc(o.activity) + '</td>' +
+      var opsCell = done
+        ? '<span class="badge badge-settled">已结算 · ' + esc(e.settledAt) + '</span>'
+        : '<button class="btn btn-sm" data-act="entry-move" data-pool="' + p.id + '" data-entry="' + e.id + '">改侧</button> ' +
+          '<button class="btn btn-sm btn-danger" data-act="entry-remove" data-pool="' + p.id + '" data-entry="' + e.id + '">移除</button>';
+      html += '<tr class="' + (done ? 'row-settled' : (warn ? 'row-warn' : '')) + '">' +
+        '<td>' + (done ? '' : '<input type="checkbox" class="row-settle-check" data-entry="' + e.id + '">') + '</td>' +
+        '<td>' + esc(o.activity) + '</td>' +
         '<td>' + esc(o.type) + ' / ' + esc(o.model) + '</td>' +
         '<td>' + esc(o.buyer) + '</td><td class="num">' + qty + '</td>' +
         '<td class="num">' + origCell + '</td><td class="num">' + rmbCell + '</td>' +
         '<td>' + esc(e.addedAt) + '</td>' +
-        '<td class="ops"><button class="btn btn-sm" data-act="entry-move" data-pool="' + p.id + '" data-entry="' + e.id + '">改侧</button> ' +
-        '<button class="btn btn-sm btn-danger" data-act="entry-remove" data-pool="' + p.id + '" data-entry="' + e.id + '">移除</button></td></tr>';
+        '<td class="ops">' + opsCell + '</td></tr>';
     });
     return html + '</tbody></table>';
   }
@@ -405,17 +456,20 @@
       '<th></th><th>活动</th><th>类型 / 型号</th><th>购买人</th><th class="num">件数</th><th>币种</th><th class="num">外币原价</th><th class="num">人民币</th><th>来源</th><th>池归属</th><th class="ops">操作</th></tr></thead><tbody>';
     rows.forEach(function (o) {
       var qty = o.count || 1;
+      var mem = membership[o.id];
+      var settled = mem && mem.settled;
       var origCell = isForeign(o)
         ? (o.priceOrig != null ? esc(fmtMoney(o.currency, o.priceOrig)) : '<span class="miss">—</span><span class="mini-warn">未转外币</span>')
         : '<span class="miss">—</span>';
       var rmbCell = o.price != null ? '¥' + esc(fmtN(round2(o.price)))
         : '<span class="miss">—</span><span class="mini-warn">未转¥</span>';
-      html += '<tr><td><input type="checkbox" data-id="' + o.id + '"></td>' +
+      html += '<tr><td><input type="checkbox" data-id="' + o.id + '"' + (settled ? ' disabled title="已结算，无需再勾选"' : '') + '></td>' +
         '<td>' + esc(o.activity) + '</td><td>' + esc(o.type) + ' / ' + esc(o.model) + '</td>' +
         '<td>' + esc(o.buyer) + '</td><td class="num">' + qty + '</td><td>' + esc(ccyLabel(o.currency)) + '</td>' +
         '<td class="num">' + origCell + '</td><td class="num">' + rmbCell + '</td>' +
         '<td>' + (o.source === 'manual' ? '<span class="badge badge-manual">手工</span>' : '<span class="badge">订单</span>') + '</td>' +
-        '<td>' + (membership[o.id] ? '<span class="badge badge-pool">' + esc(membership[o.id]) + '</span>' : '—') + '</td>' +
+        '<td>' + (mem ? '<span class="badge badge-pool">' + esc(mem.label) + '</span>' : '—') +
+        (settled ? ' <span class="badge badge-settled">已结算</span>' : '') + '</td>' +
         '<td class="ops"><button class="btn btn-sm" data-act="edit-price" data-order="' + o.id + '">改价</button></td></tr>';
     });
     document.getElementById('libBody').innerHTML = html + '</tbody></table>';
@@ -450,6 +504,7 @@
       '<button class="btn btn-primary" data-act="confirm-ok">确定</button></div>');
   }
   var pendingConfirm = null;
+  var pendingSettleEntries = [];
 
   function modalNewPool() {
     openModal('<h3>新建蓄水池</h3>' +
@@ -480,16 +535,43 @@
       '<button class="btn btn-primary" data-act="manual-save" data-pool="' + poolId + '">确定</button></div>');
   }
 
-  function modalSettle(poolId) {
+  function modalSettle(poolId, entryIds) {
     var pool = poolById(poolId);
+    pendingSettleEntries = entryIds || [];
+    var dir = 'them2us', amount = '', firstCcy = 'cny', linkedNote = '';
+    if (pendingSettleEntries.length && pool) {
+      var net = 0;
+      pendingSettleEntries.forEach(function (eid, idx) {
+        var e = pool.entries.find(function (x) { return x.id === eid; });
+        var o = e && orderById(e.orderId);
+        if (!o) return;
+        if (idx === 0) firstCcy = o.currency || 'cny';
+        var qty = o.count || 1;
+        var v = (firstCcy === 'cny' || firstCcy === o.currency)
+          ? ((firstCcy === 'cny' ? o.price : o.priceOrig) || 0) * qty
+          : 0; // 币种不符的订单仅作标记，不计入预填
+        net += (e.side === 'A' ? 1 : -1) * v;
+      });
+      net = round2(net);
+      if (net > 0) { dir = 'us2them'; amount = net; }
+      else if (net < 0) { dir = 'them2us'; amount = -net; }
+      linkedNote = '<p class="form-hint">已选 ' + pendingSettleEntries.length +
+        ' 笔订单：方向与金额已按勾选预填（可改，如抹零）；确定后这些订单标记「已结算」并移出活水净额，之后无需再勾选。与所选币种不符的订单仅作标记。</p>';
+    }
     openModal('<h3>记一笔结算（' + esc(pool ? pool.name : '') + '）</h3>' +
       '<div class="form-grid">' +
-      '<div class="form-row"><label>方向</label><select id="sDirection"><option value="them2us">对方 → 我方（冲抵我欠）</option><option value="us2them">我方 → 对方（冲抵TA欠）</option></select></div>' +
-      '<div class="form-row"><label>币种</label><select id="sCurrency"><option value="jpy">日元</option><option value="krw">韩元</option><option value="cny">人民币</option></select></div>' +
-      '<div class="form-row"><label>金额</label><input id="sAmount" type="number" step="0.01" min="0.01"></div>' +
+      '<div class="form-row"><label>方向</label><select id="sDirection">' +
+      '<option value="them2us"' + (dir === 'them2us' ? ' selected' : '') + '>对方 → 我方（冲抵TA欠）</option>' +
+      '<option value="us2them"' + (dir === 'us2them' ? ' selected' : '') + '>我方 → 对方（冲抵我欠）</option></select></div>' +
+      '<div class="form-row"><label>币种</label><select id="sCurrency">' +
+      '<option value="jpy"' + (firstCcy === 'jpy' ? ' selected' : '') + '>日元</option>' +
+      '<option value="krw"' + (firstCcy === 'krw' ? ' selected' : '') + '>韩元</option>' +
+      '<option value="cny"' + (firstCcy === 'cny' ? ' selected' : '') + '>人民币</option></select></div>' +
+      '<div class="form-row"><label>金额</label><input id="sAmount" type="number" step="0.01" min="0.01" value="' + amount + '"></div>' +
       '<div class="form-row"><label>日期</label><input id="sDate" type="date" value="' + today() + '"></div>' +
       '</div>' +
       '<div class="form-row"><label>备注（如：PayPal 转账 / 换货抵账）</label><input id="sNote"></div>' +
+      linkedNote +
       '<div class="modal-foot"><button class="btn" data-act="modal-close">取消</button>' +
       '<button class="btn btn-primary" data-act="settle-save" data-pool="' + poolId + '">确定</button></div>');
   }
@@ -580,17 +662,27 @@
       toast('已记入，并同步新建「手工」订单（订单库可排查）');
     }
     else if (act === 'settle') { modalSettle(poolId); }
+    else if (act === 'settle-checked') {
+      var sids = Array.prototype.map.call(
+        document.querySelectorAll('#detail-' + poolId + ' input.row-settle-check:checked'),
+        function (c) { return c.getAttribute('data-entry'); }
+      );
+      if (!sids.length) { toast('先在明细里勾选要结算的订单'); return; }
+      modalSettle(poolId, sids);
+    }
     else if (act === 'settle-save') {
       var rec = actions.addSettlement(poolId, {
         direction: document.getElementById('sDirection').value,
         currency: document.getElementById('sCurrency').value,
         amount: document.getElementById('sAmount').value,
         date: document.getElementById('sDate').value,
-        note: document.getElementById('sNote').value.trim()
+        note: document.getElementById('sNote').value.trim(),
+        entryIds: pendingSettleEntries
       });
+      pendingSettleEntries = [];
       if (!rec) { toast('请填写大于 0 的金额'); return; }
       closeModal();
-      toast('已记一笔结算，净额已冲抵');
+      toast(rec.entryIds ? '已结算 ' + rec.entryIds.length + ' 笔订单，已标记「已结算」' : '已记一笔结算，净额已冲抵');
     }
     else if (act === 'entry-move') { actions.moveEntry(poolId, el.getAttribute('data-entry')); }
     else if (act === 'entry-remove') {

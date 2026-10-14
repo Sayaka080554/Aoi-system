@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.25.2 (2026-10-14)
+
+> **修复蓄水池弹窗按钮点击无反应**（用户实测「新建蓄水池」点创建无反应）：弹窗容器 `#reservoirModalBox`
+> 曾带 `onclick="event.stopPropagation()"`（自活动弹窗抄来的防误关写法）——蓄水池弹窗按钮靠
+> **document 级 `[data-ract]` 事件委托**响应，stopPropagation 把点击拦在容器上，委托监听器永远收不到，
+> 创建/取消/手工账确定/结算确定全部失灵。移除该属性：遮罩误关本就由捕获阶段按 `e.target.id ===
+> 'reservoirModal'` 判断兜底，不依赖它。jsdom 28 例（+3：委托点创建建池关层落库/遮罩关·盒内不关/取消按钮）。
+
+### Fixed
+- `index.html` `#reservoirModalBox`：移除内联 `onclick="event.stopPropagation()"`（v3.25.0 引入的回归）。
+
 ## v3.25.1 (2026-10-14)
 
 > **修复跨币种单侧缺数据被按 0 抵扣**（用户实测：A 侧全日元账 8,700、B 侧全人民币账 ¥716，日元净额显示

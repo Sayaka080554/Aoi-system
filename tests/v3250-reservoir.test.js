@@ -305,3 +305,32 @@ describe('池管理', () => {
     expect(s.missingRmb.length).toBe(0);
   });
 });
+
+describe('蓄水池弹层交互（回归：box 曾带 stopPropagation 吞掉 document 委托点击，创建/取消全失灵）', () => {
+  it('新建蓄水池：点「创建」按钮经事件委托建池、关弹层、保存', async () => {
+    R().modalNewPool();
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(false);
+    doc.getElementById('resNpName').value = '测试池';
+    doc.querySelector('[data-ract="pool-save"]').click();
+    await new Promise((r) => setTimeout(r, 0)); // 等异步 createPool 落库
+    const created = aoi.state.data.reservoirs.find((p) => p.name === '测试池');
+    expect(created).toBeTruthy();
+    expect(created.sideA).toContain('TA 帮我买');
+    expect(aoi.saveTeamData).toHaveBeenCalledWith(aoi.state.data);
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(true);
+  });
+
+  it('点遮罩关闭弹层；点弹窗内部不关闭', () => {
+    R().modalNewPool();
+    doc.getElementById('reservoirModalBox').click();
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(false);
+    doc.getElementById('reservoirModal').click();
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(true);
+  });
+
+  it('取消按钮（modal-close）关闭弹层', () => {
+    R().modalNewPool();
+    doc.querySelector('[data-ract="modal-close"]').click();
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(true);
+  });
+});

@@ -68,14 +68,15 @@ describe('模块与页面接线（静默待命 / 静态标记 / 导航）', () =
     expect(doc.getElementById('reservoirBody')).not.toBeNull();
   });
 
-  it('Aoi.nav(view-reservoir) 显示视图并渲染池卡与参考净额', () => {
+  it('Aoi.nav(view-reservoir) 显示视图并渲染池卡：参考净额 + 单侧币种不宣称方向', () => {
     aoi.nav('view-reservoir');
     expect(doc.getElementById('view-reservoir').classList.contains('hidden')).toBe(false);
     const body = doc.getElementById('reservoirBody').textContent;
     expect(body).toContain('日本线 · 佐桑结算');
     expect(body).toContain('参考净额');
-    expect(body).toContain('我方欠对方');
-    expect(body).toContain('对方欠我方');
+    expect(body).toContain('仅侧A有账');   // 日元桶只有 A 侧活水账（缺失侧不按 0 抵扣）
+    expect(body).toContain('仅侧B有账');
+    expect(body).toContain('对方欠我方');  // 参考净额 −228.8 / −95.2
   });
 
   it('renderAll 对空 reservoirs 显示空状态并缺省 d.reservoirs', () => {
@@ -118,6 +119,13 @@ describe('净额计算（一单一次计入 / 币种桶 / 人民币视图 / 参�
     expect(s.refNet.net).toBe(-95.2);
   });
 
+  it('单侧币种不构成抵扣方向（缺失侧不按 0），参考净额照常折算两侧', () => {
+    const s = R().computeSummary(aoi.state.data.reservoirs[0], aoi.state.data.orders);
+    expect(s.ccys.jpy.oneSided).toBe('A');  // B 侧无日元活水账
+    expect(s.ccys.cny.oneSided).toBe('B');
+    expect(s.refNet.net).toBe(-228.8);      // 参考净额仍含两侧全部活水
+  });
+
   it('按购买人小计（一池多对手方）', () => {
     const s = R().computeSummary(aoi.state.data.reservoirs[0], aoi.state.data.orders);
     expect(s.buyers['佐藤'].origByCcy.jpy).toBe(6200);
@@ -144,6 +152,12 @@ describe('跨币种场景（用户实测：USD 15 vs 10，两边各转一种货�
     expect(s.rmbView.b).toBe(105);
     expect(s.missingRmb.length).toBe(1);
     expect(s.refNet.net).toBe(-35);       // (10−15)×7 → 对方欠 ≈¥35
+    expect(s.ccys.usd.oneSided).toBeNull(); // 两侧都有美元账 → 正常宣称方向
+    await R().createManual(p.id, 'A', { activity: '美国代购', type: '徽章', model: 'USD20', buyer: '约翰', currency: 'usd', priceOrig: '20', price: '', count: '1', note: '' });
+    const s2 = R().computeSummary(p, aoi.state.data.orders);
+    expect(s2.ccys.usd.net).toBe(15); // (10 + 20) − 15 → 我方欠对方 15 刀
+    aoi.nav('view-reservoir');
+    expect(doc.getElementById('reservoirBody').textContent).toContain('我方欠对方'); // 双侧有账时方向恢复
   });
 
   it('TA 侧改记日元 1400：参考净额随汇率折算保持一致（可编辑汇率）', async () => {

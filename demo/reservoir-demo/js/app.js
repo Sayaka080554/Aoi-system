@@ -132,11 +132,11 @@
   }
 
   function computeSummary(pool) {
-    var ccys = {};   // 记账币种 -> { a,b 全量, sa,sb 已结算 }
+    var ccys = {};   // 记账币种 -> { a,b 全量, sa,sb 已结算, aHas,bHas 活水中该侧有无此币种账 }
     var rmb = { a: 0, b: 0 };
     var missingRmb = [], missingOrig = [];
     var buyers = {};
-    function bucket(c) { return ccys[c] || (ccys[c] = { a: 0, b: 0, sa: 0, sb: 0 }); }
+    function bucket(c) { return ccys[c] || (ccys[c] = { a: 0, b: 0, sa: 0, sb: 0, aHas: false, bHas: false }); }
     pool.entries.forEach(function (e) {
       var o = orderById(e.orderId);
       if (!o) return; // 正式版：订单已删时保留快照灰显；demo mock 不删单
@@ -146,14 +146,14 @@
       var sside = e.side === 'B' ? 'sb' : 'sa';
       var bk = bucket(isForeign(o) ? o.currency : 'cny');
       if (isForeign(o)) {
-        if (o.priceOrig != null) { bk[side] += o.priceOrig * qty; if (done) bk[sside] += o.priceOrig * qty; }
+        if (o.priceOrig != null) { bk[side] += o.priceOrig * qty; if (done) bk[sside] += o.priceOrig * qty; if (!done) bk[side + 'Has'] = true; }
         else if (!done) missingOrig.push(o.id);
         if (o.price != null) { if (!done) rmb[side] += o.price * qty; }
         else if (!done) missingRmb.push(o.id);
       } else {
         if (o.price != null) {
           bk[side] += o.price * qty; if (done) bk[sside] += o.price * qty;
-          if (!done) rmb[side] += o.price * qty;
+          if (!done) { rmb[side] += o.price * qty; bk[side + 'Has'] = true; }
         } else if (!done) missingRmb.push(o.id);
       }
       var b = buyers[o.buyer] || (buyers[o.buyer] = { entries: 0, qty: 0, origByCcy: {}, rmb: 0 });
@@ -180,6 +180,9 @@
       out.ccys[c] = {
         a: activeA, b: activeB,
         settledA: round2(t.sa), settledB: round2(t.sb),
+        // 单侧币种：只有一侧在该币种有活水账时，净额不构成抵扣关系（另侧账记在其他币种），
+        // 方向以参考净额为准——缺失侧不得按 0 参与相抵（2026-10-14 用户实测修正）
+        oneSided: (t.aHas && !t.bHas) ? 'A' : (!t.aHas && t.bHas) ? 'B' : null,
         them2us: round2(st.them2us), us2them: round2(st.us2them),
         offset: round2(st.them2us - st.us2them),
         net: round2(activeA - activeB + st.them2us - st.us2them)
@@ -363,11 +366,16 @@
     keys.forEach(function (c) {
       var v = s.ccys[c];
       var cleared = v.a === 0 && v.b === 0 && (v.settledA || v.settledB);
-      var dir = netDirection(v.net);
-      var cls = cleared ? 'net-zero' : dir.cls;
-      var label = cleared ? '已结清' : dir.text;
+      var cls, label, tip = '';
+      if (cleared) { cls = 'net-zero'; label = '已结清'; }
+      else if (v.oneSided) {
+        cls = 'net-one';
+        label = '仅侧' + v.oneSided + '有账';
+        tip = ' title="该币种只有一侧有账（另侧账记在其他币种），缺失侧不按 0 抵扣——总欠款看参考净额"';
+      }
+      else { var dir = netDirection(v.net); cls = dir.cls; label = dir.text; }
       var amount = cleared ? '' : '<b>' + esc(fmtMoney(c, Math.abs(v.net))) + '</b>';
-      html += '<span class="net-item ' + cls + '">' + esc(ccyLabel(c)) + ' · ' + label + amount + '</span>';
+      html += '<span class="net-item ' + cls + '"' + tip + '>' + esc(ccyLabel(c)) + ' · ' + label + amount + '</span>';
     });
     if (s.missingRmb.length) html += '<span class="warn-chip" data-act="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingRmb.length + ' 笔未转人民币</span>';
     if (s.missingOrig.length) html += '<span class="warn-chip" data-act="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingOrig.length + ' 笔未转外币</span>';
@@ -403,13 +411,14 @@
     html += '<div class="sec-title">币种汇总（活水 = 未结算部分；净额 = 活水A − 活水B + 结算冲抵）</div><table class="tbl"><thead><tr>' +
       '<th>币种</th><th class="num">侧A 活水</th><th class="num">侧B 活水</th><th class="num">结算冲抵</th><th class="num">净额</th><th>方向</th><th class="num">已结算</th></tr></thead><tbody>';
     Object.keys(s.ccys).forEach(function (c) {
-      var v = s.ccys[c], d = netDirection(v.net);
+      var v = s.ccys[c];
+      var dir = v.oneSided ? { text: '仅侧' + v.oneSided + '有账（看参考净额）' } : netDirection(v.net);
       html += '<tr><td>' + esc(ccyLabel(c)) + '</td>' +
         '<td class="num">' + esc(fmtMoney(c, v.a)) + '</td>' +
         '<td class="num">' + esc(fmtMoney(c, v.b)) + '</td>' +
         '<td class="num">' + (v.offset ? esc(fmtMoney(c, v.offset)) : '—') + '</td>' +
         '<td class="num"><b>' + esc(fmtMoney(c, v.net)) + '</b></td>' +
-        '<td>' + d.text + '</td>' +
+        '<td>' + dir.text + '</td>' +
         '<td class="num">' + ((v.settledA || v.settledB) ? esc(fmtMoney(c, v.settledA)) + ' / ' + esc(fmtMoney(c, v.settledB)) : '—') + '</td></tr>';
     });
     html += '</tbody></table>';

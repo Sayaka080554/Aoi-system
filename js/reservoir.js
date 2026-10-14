@@ -60,7 +60,7 @@ Aoi.reservoir.computeSummary = function (pool, orders) {
   var rmb = { a: 0, b: 0 };
   var missingRmb = [], missingOrig = [];
   var buyers = {};
-  function bucket(c) { return ccys[c] || (ccys[c] = { a: 0, b: 0, sa: 0, sb: 0 }); }
+  function bucket(c) { return ccys[c] || (ccys[c] = { a: 0, b: 0, sa: 0, sb: 0, aHas: false, bHas: false }); }
   (pool.entries || []).forEach(function (e) {
     var o = resOrderById({ orders: orders }, e.orderId);
     if (!o) return; // 订单已删：保留快照灰显口径（与 demo 一致）
@@ -71,14 +71,14 @@ Aoi.reservoir.computeSummary = function (pool, orders) {
     var foreign = Aoi.reservoir.isForeign(o);
     var bk = bucket(foreign ? o.currency : 'cny');
     if (foreign) {
-      if (o.priceOrig != null) { bk[side] += o.priceOrig * qty; if (done) bk[sside] += o.priceOrig * qty; }
+      if (o.priceOrig != null) { bk[side] += o.priceOrig * qty; if (done) bk[sside] += o.priceOrig * qty; if (!done) bk[side + 'Has'] = true; }
       else if (!done) missingOrig.push(o.id);
       if (o.price != null) { if (!done) rmb[side] += o.price * qty; }
       else if (!done) missingRmb.push(o.id);
     } else {
       if (o.price != null) {
         bk[side] += o.price * qty; if (done) bk[sside] += o.price * qty;
-        if (!done) rmb[side] += o.price * qty;
+        if (!done) { rmb[side] += o.price * qty; bk[side + 'Has'] = true; }
       } else if (!done) missingRmb.push(o.id);
     }
     var b = buyers[o.buyer] || (buyers[o.buyer] = { entries: 0, qty: 0, origByCcy: {}, rmb: 0 });
@@ -105,6 +105,9 @@ Aoi.reservoir.computeSummary = function (pool, orders) {
     out.ccys[c] = {
       a: activeA, b: activeB,
       settledA: Aoi.reservoir.round2(t.sa), settledB: Aoi.reservoir.round2(t.sb),
+      // 单侧币种：只有一侧在该币种有活水账时，净额不构成抵扣关系（另侧账记在其他币种），
+      // 方向以参考净额为准——缺失侧不得按 0 参与相抵（2026-10-14 用户实测修正）
+      oneSided: (t.aHas && !t.bHas) ? 'A' : (!t.aHas && t.bHas) ? 'B' : null,
       them2us: Aoi.reservoir.round2(st.them2us), us2them: Aoi.reservoir.round2(st.us2them),
       offset: Aoi.reservoir.round2(st.them2us - st.us2them),
       net: Aoi.reservoir.round2(activeA - activeB + st.them2us - st.us2them)
@@ -338,11 +341,15 @@ Aoi.reservoir.setPoolRates = async function (poolId, rates) {
 
 var resExpanded = {};
 
-function resNetChip(cls, label, amountHtml) {
-  var palette = cls === 'owe' ? 'bg-red-50 border-red-200 text-red-700'
+function paletteFor(cls) {
+  return cls === 'owe' ? 'bg-red-50 border-red-200 text-red-700'
     : cls === 'owed' ? 'bg-green-50 border-green-200 text-green-700'
+    : cls === 'one' ? 'bg-slate-50 border-slate-200 text-slate-500'
     : 'bg-gray-50 border-gray-200 text-gray-400';
-  return '<span class="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold border ' + palette + '">'
+}
+
+function resNetChip(cls, label, amountHtml) {
+  return '<span class="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold border ' + paletteFor(cls) + '">'
     + Aoi.escapeHtml(label) + (amountHtml || '') + '</span>';
 }
 
@@ -362,10 +369,20 @@ function resNetItemsHtml(pool, orders) {
   Object.keys(s.ccys).forEach(function (c) {
     var v = s.ccys[c];
     var cleared = v.a === 0 && v.b === 0 && (v.settledA || v.settledB);
-    var dir = Aoi.reservoir.netDirection(v.net);
-    var label = Aoi.reservoir.ccyLabel(c) + ' · ' + (cleared ? '已结清' : dir.text);
+    var cls, label, tip = '';
+    if (cleared) { cls = 'zero'; label = '已结清'; }
+    else if (v.oneSided) {
+      cls = 'one';
+      label = Aoi.reservoir.ccyLabel(c) + ' · 仅侧' + v.oneSided + '有账';
+      tip = ' title="该币种只有一侧有账（另侧账记在其他币种），缺失侧不按 0 抵扣——总欠款看参考净额"';
+    } else {
+      var dir = Aoi.reservoir.netDirection(v.net);
+      cls = dir.cls;
+      label = Aoi.reservoir.ccyLabel(c) + ' · ' + dir.text;
+    }
     var amount = cleared ? '' : '<b class="mx-1">' + Aoi.escapeHtml(Aoi.reservoir.fmtMoney(c, Math.abs(v.net))) + '</b>';
-    html += resNetChip(cleared ? 'zero' : dir.cls, label, amount);
+    html += '<span class="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold border ' + paletteFor(cls) + '"' + tip + '>'
+      + Aoi.escapeHtml(label) + amount + '</span>';
   });
   if (s.missingRmb.length) html += '<span class="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold border border-amber-200 bg-amber-50 text-amber-700 cursor-pointer" data-ract="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingRmb.length + ' 笔未转人民币</span>';
   if (s.missingOrig.length) html += '<span class="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold border border-amber-200 bg-amber-50 text-amber-700 cursor-pointer" data-ract="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingOrig.length + ' 笔未转外币</span>';
@@ -420,7 +437,7 @@ function resDetailHtml(pool, orders) {
     + '<th class="px-2 py-1.5 text-right">已结算</th></tr></thead><tbody>';
   Object.keys(s.ccys).forEach(function (c) {
     var v = s.ccys[c];
-    var dir = Aoi.reservoir.netDirection(v.net);
+    var dir = v.oneSided ? { text: '仅侧' + v.oneSided + '有账（看参考净额）' } : Aoi.reservoir.netDirection(v.net);
     html += '<tr><td class="px-2 py-1.5">' + Aoi.escapeHtml(Aoi.reservoir.ccyLabel(c)) + '</td>'
       + '<td class="px-2 py-1.5 text-right">' + Aoi.escapeHtml(Aoi.reservoir.fmtMoney(c, v.a)) + '</td>'
       + '<td class="px-2 py-1.5 text-right">' + Aoi.escapeHtml(Aoi.reservoir.fmtMoney(c, v.b)) + '</td>'

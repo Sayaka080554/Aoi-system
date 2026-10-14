@@ -75,6 +75,7 @@ main { padding: 18px 0 40px; }
 .net-owed { background: #e8f0ea; border-color: #d3e3d8; color: #3f7358; }   /* 对方欠我方 */
 .net-zero { color: #8b8378; }
 .net-ref  { background: #fff; border: 1px dashed #d9604a; color: #b04a35; } /* 参考净额（统一折算） */
+.net-one  { background: #eef2f7; border-color: #d7dfeb; color: #5a6b7f; }   /* 单侧币种（不构成抵扣） */
 .rate-input {
   width: 90px; border: 1px solid #e2d8c6; border-radius: 8px; padding: 3px 8px;
   font-size: .78rem; background: #fffdf9;

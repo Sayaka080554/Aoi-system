@@ -28,12 +28,13 @@ function showLib() {
 }
 
 describe('渲染冒烟', () => {
-  it('两张池卡 + 参考净额 + 双向欠款文案', () => {
+  it('两张池卡 + 参考净额 + 单侧币种不宣称方向（缺失侧不按 0）', () => {
     expect(w.document.querySelectorAll('.pool-card').length).toBe(2);
     const text = w.document.getElementById('poolList').textContent;
     expect(text).toContain('参考净额');
-    expect(text).toContain('我方欠对方');
-    expect(text).toContain('对方欠我方');
+    expect(text).toContain('仅侧A有账');   // 日元桶只有 A 侧有活水账
+    expect(text).toContain('仅侧B有账');   // 人民币桶只有 B 侧有活水账
+    expect(text).toContain('对方欠我方');  // 参考净额 −228.8 / −95.2
   });
 
   it('订单库渲染 10 笔 mock 订单，手工账带「手工」标记', () => {
@@ -78,6 +79,13 @@ describe('净额计算（一单一次计入，按记账币种分桶）', () => {
     expect(s.refNet.net).toBe(-228.8);
   });
 
+  it('单侧币种不构成抵扣方向（缺失侧不按 0），参考净额照常折算两侧', () => {
+    const s = RD().computeSummary(RD().state.reservoirs[0]);
+    expect(s.ccys.jpy.oneSided).toBe('A');  // B 侧无日元活水账（o10 缺外币原价不算在账）
+    expect(s.ccys.cny.oneSided).toBe('B');
+    expect(s.refNet.net).toBe(-228.8);      // 参考净额仍含两侧全部活水
+  });
+
   it('按购买人小计（一池多对手方）', () => {
     const s = RD().computeSummary(RD().state.reservoirs[0]);
     expect(s.buyers['佐藤'].origByCcy.jpy).toBe(6200);   // o1 2400 + o2 3800
@@ -102,6 +110,11 @@ describe('跨币种场景（用户截图：USD 15 vs 10，两边各转一种货�
     expect(s.refNet.net).toBe(-35);        // (10−15)×7 → 对方欠 ≈¥35（参考汇率 usd=7）
     const text = w.document.getElementById('poolList').textContent;
     expect(text).toContain('参考净额');
+    expect(s.ccys.usd.oneSided).toBeNull(); // 两侧都有美元账 → 正常宣称方向
+    RD().actions.createManual(p.id, 'A', { activity: '美国代购', type: '徽章', model: 'USD20', buyer: '约翰', currency: 'usd', priceOrig: '20', price: '', count: '1', note: '' });
+    const s2 = RD().computeSummary(p);
+    expect(s2.ccys.usd.net).toBe(15); // (10 + 20) − 15 → 我方欠对方 15 刀
+    expect(w.document.getElementById('poolList').textContent).toContain('我方欠对方'); // 双侧有账时方向恢复
   });
 
   it('TA 侧改记日元 1400（7/140=0.05）参考净额不变', () => {

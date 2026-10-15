@@ -334,3 +334,88 @@ describe('蓄水池弹层交互（回归：box 曾带 stopPropagation 吞掉 doc
     expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(true);
   });
 });
+
+describe('就地转化（v3.26.0：未转¥/未转外币 点一下就地补，预填参考汇率）', () => {
+  it('卡头警告标签点击 → 打开第一笔转化弹窗，人民币按参考汇率预填', () => {
+    aoi.nav('view-reservoir');
+    doc.querySelector('[data-ract="convert"][data-pool="r1"][data-kind="rmb"]').click();
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(false);
+    // 第一笔 = o4（亚克力 900 日元 ×3，汇率 0.048 → 43.2）
+    expect(doc.getElementById('resCvPrice').value).toBe('43.2');
+    expect(doc.getElementById('resCvPrice').getAttribute('data-count')).toBe('3');
+  });
+
+  it('小计随输入联动；保存写入 orders.price，提醒消失、弹层关闭', async () => {
+    aoi.nav('view-reservoir');
+    doc.querySelector('[data-ract="convert"][data-pool="r1"][data-kind="rmb"]').click();
+    const input = doc.getElementById('resCvPrice');
+    input.value = '50';
+    input.dispatchEvent(new win.Event('input', { bubbles: true }));
+    expect(doc.getElementById('resCvSubtotal').textContent).toBe('150'); // 50 × 3
+    doc.querySelector('[data-ract="convert-save"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(aoi.state.data.orders.find((o) => o.id === 'o4').price).toBe(50);
+    expect(aoi.saveTeamData).toHaveBeenCalledWith(aoi.state.data);
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(true);
+    const s = R().computeSummary(aoi.state.data.reservoirs[0], aoi.state.data.orders);
+    expect(s.missingRmb.length).toBe(0);
+  });
+
+  it('保存并下一笔串联多笔，全部走完自动关闭', async () => {
+    aoi.orders.selectedIds = vi.fn(() => ['o6']);
+    R().openAssignFromOrders();
+    doc.getElementById('reservoirAssignPool').value = 'r2';
+    doc.getElementById('reservoirAssignSide').value = 'A';
+    await R().confirmAssign();
+    await R().createManual('r2', 'A', { activity: '谷子杂项', type: '挂件', model: 'JPY800', buyer: '金桑', currency: 'jpy', priceOrig: '800', price: '', count: '1', note: '' });
+    aoi.nav('view-reservoir');
+    doc.querySelector('[data-ract="convert"][data-pool="r2"][data-kind="rmb"]').click();
+    expect(doc.getElementById('resCvPrice').value).toBe('79.5'); // o6：15,000 韩元 × 0.0053
+    doc.querySelector('[data-ract="convert-save-next"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(aoi.state.data.orders.find((o) => o.id === 'o6').price).toBe(79.5);
+    expect(doc.getElementById('resCvPrice').value).toBe('38.4'); // 第二笔：手工账 800 日元 × 0.048
+    doc.querySelector('[data-ract="convert-save-next"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(true);
+    const s = R().computeSummary(aoi.state.data.reservoirs[1], aoi.state.data.orders);
+    expect(s.missingRmb.length).toBe(0);
+  });
+
+  it('跳过此笔走下一笔；保存（非 next）直接关闭，剩余保留', async () => {
+    aoi.orders.selectedIds = vi.fn(() => ['o6']);
+    R().openAssignFromOrders();
+    doc.getElementById('reservoirAssignPool').value = 'r2';
+    doc.getElementById('reservoirAssignSide').value = 'A';
+    await R().confirmAssign();
+    await R().createManual('r2', 'A', { activity: '谷子杂项', type: '挂件', model: 'JPY800', buyer: '金桑', currency: 'jpy', priceOrig: '800', price: '', count: '1', note: '' });
+    aoi.nav('view-reservoir');
+    doc.querySelector('[data-ract="convert"][data-pool="r2"][data-kind="rmb"]').click();
+    doc.querySelector('[data-ract="convert-skip"]').click(); // 跳过 o6 → 第二笔
+    expect(doc.getElementById('resCvPrice').value).toBe('38.4');
+    doc.querySelector('[data-ract="convert-save"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(doc.getElementById('reservoirModal').classList.contains('hidden')).toBe(true);
+    const s = R().computeSummary(aoi.state.data.reservoirs[1], aoi.state.data.orders);
+    expect(s.missingRmb.length).toBe(1); // o6 被跳过，仍留提醒
+  });
+
+  it('行内「未转¥」标记点击 → 单笔弹窗（无下一笔按钮）', () => {
+    aoi.nav('view-reservoir');
+    doc.querySelector('[data-ract="toggle-detail"][data-pool="r1"]').click();
+    doc.querySelector('#res-detail-r1 [data-ract="convert-one"][data-order="o4"]').click();
+    expect(doc.getElementById('resCvPrice')).not.toBeNull();
+    expect(doc.querySelector('[data-ract="convert-save-next"]')).toBeNull();
+  });
+
+  it('转化外币原价（反向）：按汇率反推预填并写 priceOrig', async () => {
+    aoi.nav('view-reservoir');
+    doc.querySelector('[data-ract="convert"][data-pool="r1"][data-kind="orig"]').click();
+    expect(doc.getElementById('resCvOrig').value).toBe('937.5'); // o10：¥45 ÷ 0.048
+    doc.querySelector('[data-ract="convert-save"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(aoi.state.data.orders.find((o) => o.id === 'o10').priceOrig).toBe(937.5);
+    const s = R().computeSummary(aoi.state.data.reservoirs[0], aoi.state.data.orders);
+    expect(s.missingOrig.length).toBe(0);
+  });
+});

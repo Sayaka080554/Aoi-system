@@ -283,3 +283,49 @@ describe('DOM 交互冒烟', () => {
     expect(RD().state.reservoirs[1].entries.length).toBe(2);
   });
 });
+
+describe('就地转化（v3.26.0：未转¥/未转外币 点一下就地补，预填参考汇率）', () => {
+  it('卡头警告标签点击 → 打开第一笔转化弹窗，人民币按参考汇率预填', () => {
+    w.document.querySelector('[data-act="convert"][data-pool="r1"][data-kind="rmb"]').click();
+    expect(w.document.getElementById('modalRoot').classList.contains('hidden')).toBe(false);
+    expect(w.document.getElementById('resCvPrice').value).toBe('43.2'); // o4：900 日元 × 0.048
+    expect(w.document.getElementById('resCvPrice').getAttribute('data-count')).toBe('3');
+  });
+
+  it('小计随输入联动；保存写入 orders.price，提醒消失、弹层关闭', () => {
+    w.document.querySelector('[data-act="convert"][data-pool="r1"][data-kind="rmb"]').click();
+    const input = w.document.getElementById('resCvPrice');
+    input.value = '50';
+    input.dispatchEvent(new w.Event('input', { bubbles: true }));
+    expect(w.document.getElementById('resCvSubtotal').textContent).toBe('150'); // 50 × 3
+    w.document.querySelector('[data-act="convert-save"]').click();
+    expect(RD().state.orders.find((o) => o.id === 'o4').price).toBe(50);
+    expect(RD().computeSummary(RD().state.reservoirs[0]).missingRmb.length).toBe(0);
+    expect(w.document.getElementById('modalRoot').classList.contains('hidden')).toBe(true);
+  });
+
+  it('保存并下一笔串联两笔，走完自动关闭', () => {
+    RD().actions.assignOrders('r2', ['o6'], 'B'); // o6 缺人民币（15,000 韩元）
+    RD().actions.createManual('r2', 'A', { activity: '谷子杂项', type: '挂件', model: 'JPY800', buyer: '金桑', currency: 'jpy', priceOrig: '800', price: '', count: '1', note: '' });
+    w.document.querySelector('[data-act="convert"][data-pool="r2"][data-kind="rmb"]').click();
+    expect(w.document.getElementById('resCvPrice').value).toBe('79.5'); // o6：15,000 × 0.0053
+    w.document.querySelector('[data-act="convert-save-next"]').click();
+    expect(w.document.getElementById('resCvPrice').value).toBe('38.4'); // 手工账 800 × 0.048
+    w.document.querySelector('[data-act="convert-save-next"]').click();
+    expect(w.document.getElementById('modalRoot').classList.contains('hidden')).toBe(true);
+    expect(RD().computeSummary(RD().state.reservoirs[1]).missingRmb.length).toBe(0);
+  });
+
+  it('行内「未转¥」→ 单笔弹窗（无下一笔按钮）；反向补外币写 priceOrig', () => {
+    w.document.querySelector('[data-act="toggle-detail"][data-pool="r1"]').click();
+    w.document.querySelector('#detail-r1 [data-act="convert-one"][data-order="o4"]').click();
+    expect(w.document.getElementById('resCvPrice')).not.toBeNull();
+    expect(w.document.querySelector('[data-act="convert-save-next"]')).toBeNull();
+    w.document.querySelector('[data-act="modal-close"]').click();
+    w.document.querySelector('[data-act="convert"][data-pool="r1"][data-kind="orig"]').click();
+    expect(w.document.getElementById('resCvOrig').value).toBe('937.5'); // o10：¥45 ÷ 0.048
+    w.document.querySelector('[data-act="convert-save"]').click();
+    expect(RD().state.orders.find((o) => o.id === 'o10').priceOrig).toBe(937.5);
+    expect(RD().computeSummary(RD().state.reservoirs[0]).missingOrig.length).toBe(0);
+  });
+});

@@ -342,6 +342,17 @@
       });
       save(); renderAll();
       return pool.rates;
+    },
+
+    /* 就地转化（v3.26.0）：只补订单缺失侧的金额——kind='rmb' 写 price、kind='orig' 写 priceOrig */
+    convertOrder: function (orderId, kind, value) {
+      var o = orderById(orderId);
+      var v = parseFloat(value);
+      if (!o || isNaN(v) || v < 0) { toast('请填写不小于 0 的金额'); return null; }
+      if (kind === 'orig') o.priceOrig = round2(v); else o.price = round2(v);
+      save(); renderAll();
+      toast('已转化' + (kind === 'orig' ? '外币原价' : '人民币'));
+      return o;
     }
   };
 
@@ -377,8 +388,8 @@
       var amount = cleared ? '' : '<b>' + esc(fmtMoney(c, Math.abs(v.net))) + '</b>';
       html += '<span class="net-item ' + cls + '"' + tip + '>' + esc(ccyLabel(c)) + ' · ' + label + amount + '</span>';
     });
-    if (s.missingRmb.length) html += '<span class="warn-chip" data-act="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingRmb.length + ' 笔未转人民币</span>';
-    if (s.missingOrig.length) html += '<span class="warn-chip" data-act="toggle-detail" data-pool="' + pool.id + '">⚠ ' + s.missingOrig.length + ' 笔未转外币</span>';
+    if (s.missingRmb.length) html += '<span class="warn-chip" data-act="convert" data-pool="' + pool.id + '" data-kind="rmb" title="点击就地转化人民币">⚠ ' + s.missingRmb.length + ' 笔未转人民币</span>';
+    if (s.missingOrig.length) html += '<span class="warn-chip" data-act="convert" data-pool="' + pool.id + '" data-kind="orig" title="点击就地补外币原价">⚠ ' + s.missingOrig.length + ' 笔未转外币</span>';
     return html;
   }
 
@@ -426,7 +437,7 @@
     // 人民币视图 + 参考净额说明 + 参考汇率编辑
     html += '<p class="lib-note">人民币视图（同一批账的折算参考，缺转化留空提醒）：侧A ¥' + esc(fmtN(s.rmbView.a)) +
       ' / 侧B ¥' + esc(fmtN(s.rmbView.b)) +
-      (s.missingRmb.length ? '，⚠ ' + s.missingRmb.length + ' 笔未转人民币' : '') +
+      (s.missingRmb.length ? '，<span class="warn-chip" data-act="convert" data-pool="' + p.id + '" data-kind="rmb">⚠ ' + s.missingRmb.length + ' 笔未转人民币，点击就地转化</span>' : '') +
       '。跨币种欠款不可直接相减——「到底谁欠谁多少」看上方参考净额。</p>';
     var rateCcyList = Object.keys(s.refNet.rates).filter(function (c) { return c !== 'cny'; });
     html += '<div class="settle-bar"><span>参考汇率（1 外币 = ? 人民币）：</span>' +
@@ -487,9 +498,9 @@
       var origCell, rmbCell;
       if (isForeign(o)) {
         origCell = o.priceOrig != null ? esc(fmtMoney(o.currency, o.priceOrig * qty))
-          : '<span class="miss">—</span>' + (done ? '' : '<span class="mini-warn">未转外币</span>');
+          : '<span class="miss">—</span>' + (done ? '' : '<span class="mini-warn" data-act="convert-one" data-pool="' + p.id + '" data-order="' + o.id + '" data-kind="orig" title="点击就地补外币原价">未转外币</span>');
         rmbCell = o.price != null ? '¥' + esc(fmtN(round2(o.price * qty)))
-          : '<span class="miss">—</span>' + (done ? '' : '<span class="mini-warn">未转¥</span>');
+          : '<span class="miss">—</span>' + (done ? '' : '<span class="mini-warn" data-act="convert-one" data-pool="' + p.id + '" data-order="' + o.id + '" data-kind="rmb" title="点击就地转化人民币">未转¥</span>');
       } else {
         origCell = '<span class="miss">—</span>';
         rmbCell = o.price != null ? '¥' + esc(fmtN(round2(o.price * qty)))
@@ -656,6 +667,93 @@
       '<button class="btn btn-primary" data-act="price-save" data-order="' + orderId + '">保存</button></div>');
   }
 
+  /* ---------- 就地转化（v3.26.0）：警告标签 / 行内「未转¥」→ 弹窗预填参考汇率折算值 ---------- */
+
+  var resConvertQueue = { poolId: null, kind: 'rmb', order: [], currentId: null };
+
+  function resConvertStart(poolId, kind) {
+    var pool = poolById(poolId);
+    if (!pool) return;
+    var s = computeSummary(pool);
+    var ids = (kind === 'orig' ? s.missingOrig : s.missingRmb).slice();
+    if (!ids.length) { toast('本池没有未' + (kind === 'orig' ? '转外币' : '转人民币') + '的订单'); return; }
+    resConvertQueue = { poolId: poolId, kind: kind === 'orig' ? 'orig' : 'rmb', order: ids, currentId: ids[0] };
+    modalConvert(poolId, ids[0], kind);
+  }
+
+  function updateConvertSubtotal(t) {
+    var qty = parseFloat(t.getAttribute('data-count')) || 1;
+    var v = parseFloat(t.value);
+    var sub = document.getElementById(t.id === 'resCvPrice' ? 'resCvSubtotal' : 'resCvOrigSubtotal');
+    if (sub) sub.textContent = isNaN(v) ? '—' : fmtN(round2(v * qty));
+  }
+
+  function modalConvert(poolId, orderId, kind) {
+    var pool = poolById(poolId);
+    var o = orderById(orderId);
+    if (!pool || !o) return;
+    var qty = o.count || 1;
+    var rate = poolRates(pool)[o.currency || 'cny'] || 0;
+    var total = resConvertQueue.order.length;
+    var pos = total ? resConvertQueue.order.indexOf(orderId) + 1 : 0;
+    var head = '<h3>' + (kind === 'orig' ? '转化外币原价' : '转化人民币') + '（' + esc(pool.name) + '）</h3>'
+      + '<p class="form-hint mb-2">' + (total > 1 ? '第 ' + pos + ' / ' + total + ' 笔 · ' : '')
+      + esc(o.activity) + ' · ' + esc(o.type) + ' / ' + esc(o.model) + ' · ' + esc(o.buyer) + ' · ' + qty + ' 件</p>';
+    var btns = '<div class="modal-foot" style="flex-wrap:wrap;align-items:center;gap:8px">'
+      + '<button class="btn btn-sm" data-act="convert-recalc" data-pool="' + poolId + '" data-order="' + orderId + '" data-kind="' + kind + '">按参考汇率重算</button>'
+      + '<button class="btn btn-sm" data-act="convert-skip">跳过此笔</button>'
+      + '<span style="flex:1"></span>'
+      + '<button class="btn" data-act="modal-close">关闭</button>'
+      + '<button class="btn btn-sm" data-act="convert-save" data-pool="' + poolId + '" data-order="' + orderId + '" data-kind="' + kind + '">保存</button>'
+      + (total > 1 ? '<button class="btn btn-primary btn-sm" data-act="convert-save-next" data-pool="' + poolId + '" data-order="' + orderId + '" data-kind="' + kind + '">保存并下一笔 →</button>' : '')
+      + '</div>';
+    if (kind === 'orig') {
+      var rmbUnit = o.price != null ? o.price : 0;
+      var sugOrig = rate > 0 ? round2(rmbUnit / rate) : '';
+      openModal(head
+        + '<div class="form-hint mb-2">人民币：¥' + esc(fmtN(round2(rmbUnit))) + '/件 × ' + qty + ' 件 = ¥' + esc(fmtN(round2(rmbUnit * qty))) + '</div>'
+        + '<div class="form-row"><label>外币原价单价（' + esc(ccyLabel(o.currency)) + '）</label>'
+        + '<input id="resCvOrig" type="number" step="0.01" min="0" data-count="' + qty + '" value="' + sugOrig + '"></div>'
+        + '<p class="form-hint">外币小计 = 单价 × 件数 = <span id="resCvOrigSubtotal">'
+        + (sugOrig !== '' ? esc(fmtN(round2(sugOrig * qty))) : '—') + '</span> ' + esc(ccyLabel(o.currency))
+        + '　·　按参考汇率 1 ' + esc(ccyLabel(o.currency)) + ' = ' + rate + ' 人民币反推，可改成实际数</p>'
+        + btns);
+    } else {
+      var origUnit = o.priceOrig != null ? o.priceOrig : 0;
+      var sugRmb = rate > 0 ? round2(origUnit * rate) : '';
+      openModal(head
+        + '<div class="form-hint mb-2">外币：' + esc(fmtN(round2(origUnit))) + ' ' + esc(ccyLabel(o.currency)) + '/件 × ' + qty + ' 件 = '
+        + esc(fmtN(round2(origUnit * qty))) + ' ' + esc(ccyLabel(o.currency)) + '</div>'
+        + '<div class="form-row"><label>人民币单价</label>'
+        + '<input id="resCvPrice" type="number" step="0.01" min="0" data-count="' + qty + '" value="' + sugRmb + '"></div>'
+        + '<p class="form-hint">小计 = 单价 × 件数 = ¥<span id="resCvSubtotal">'
+        + (sugRmb !== '' ? esc(fmtN(round2(sugRmb * qty))) : '—') + '</span>'
+        + '　·　按参考汇率 1 ' + esc(ccyLabel(o.currency)) + ' = ' + rate + ' 人民币，可改成当场实际价</p>'
+        + btns);
+    }
+  }
+
+  function resConvertNext() {
+    var q = resConvertQueue;
+    var pool = poolById(q.poolId);
+    if (!pool) { closeModal(); return; }
+    var s = computeSummary(pool);
+    var live = (q.kind === 'orig' ? s.missingOrig : s.missingRmb);
+    var pos = q.order.indexOf(q.currentId);
+    var nextId = null;
+    for (var i = pos + 1; i < q.order.length; i++) {
+      if (live.indexOf(q.order[i]) >= 0) { nextId = q.order[i]; break; }
+    }
+    if (!nextId) {
+      closeModal();
+      q.order = []; q.currentId = null;
+      toast(live.length ? ('本池还剩 ' + live.length + ' 笔未转化（含跳过），可稍后从警告标签再进') : '本池未转化订单已全部处理完');
+      return;
+    }
+    q.currentId = nextId;
+    modalConvert(q.poolId, nextId, q.kind);
+  }
+
   /* ---------- 事件 ---------- */
   function switchTab(name) {
     document.getElementById('tab-pools').classList.toggle('hidden', name !== 'pools');
@@ -788,6 +886,41 @@
       if (selIds.length !== 1) { toast('请只勾选一笔再改价'); return; }
       modalPrice(selIds[0]);
     }
+    else if (act === 'convert') { resConvertStart(poolId, el.getAttribute('data-kind')); }
+    else if (act === 'convert-one') {
+      var cvKind = el.getAttribute('data-kind');
+      var cvOrder = el.getAttribute('data-order');
+      resConvertQueue = { poolId: poolId, kind: cvKind, order: [cvOrder], currentId: cvOrder };
+      modalConvert(poolId, cvOrder, cvKind);
+    }
+    else if (act === 'convert-recalc') {
+      var rcKind = el.getAttribute('data-kind');
+      var rcOrder = orderById(el.getAttribute('data-order'));
+      var rcPool = poolById(poolId);
+      if (!rcOrder || !rcPool) return;
+      var rcRate = poolRates(rcPool)[rcOrder.currency || 'cny'] || 0;
+      if (rcRate <= 0) { toast('该币种缺参考汇率，请先在明细里保存汇率或直接手填'); return; }
+      var rcInput = document.getElementById(rcKind === 'orig' ? 'resCvOrig' : 'resCvPrice');
+      if (!rcInput) return;
+      if (rcKind === 'orig') {
+        rcInput.value = round2((rcOrder.price != null ? rcOrder.price : 0) / rcRate);
+      } else {
+        rcInput.value = round2((rcOrder.priceOrig != null ? rcOrder.priceOrig : 0) * rcRate);
+      }
+      updateConvertSubtotal(rcInput);
+    }
+    else if (act === 'convert-skip') { resConvertNext(); }
+    else if (act === 'convert-save' || act === 'convert-save-next') {
+      var cvSaveKind = el.getAttribute('data-kind');
+      var cvInput = document.getElementById(cvSaveKind === 'orig' ? 'resCvOrig' : 'resCvPrice');
+      var cvDone = actions.convertOrder(el.getAttribute('data-order'), cvSaveKind, cvInput ? cvInput.value : '');
+      if (!cvDone) return;
+      if (act === 'convert-save-next') { resConvertNext(); }
+      else {
+        closeModal();
+        resConvertQueue = { poolId: null, kind: 'rmb', order: [], currentId: null };
+      }
+    }
   });
 
   document.addEventListener('input', function (e) {
@@ -802,6 +935,8 @@
       var rate = state.rates[cur];
       var v = numOrNull(e.target.value);
       if (rate && v != null) document.getElementById('mPrice').value = round2(v * rate);
+    } else if (e.target.id === 'resCvPrice' || e.target.id === 'resCvOrig') {
+      updateConvertSubtotal(e.target);
     }
   });
 

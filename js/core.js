@@ -77,7 +77,7 @@ Aoi.nav = function (viewId) {
 
 // —— 关于本项目（v3.24.0）：账户与设置「关于」选项卡的数据源，发版时随 CHANGELOG 同步更新 ——
 Aoi.ABOUT = {
-  version: 'v3.25.2',
+  version: 'v3.26.0',
   buildDate: '2026-10-14',
   repo: 'https://github.com/zhengdaode/Aoi-system',
   site: 'https://zhengdaode.github.io/Aoi-system/',
@@ -86,6 +86,7 @@ Aoi.ABOUT = {
   originalRepo: 'https://github.com/mossasari/Group-Buy-Management-System',
   maintainer: '郑 (zhengdaode)',
   log: [
+    'v3.26.0（2026-10-14）：蓄水池「未转化订单就地补价」——警告标签/行内标记点一下按参考汇率预填转化，支持保存并下一笔',
     'v3.25.2（2026-10-14）：修复蓄水池弹窗按钮点击无反应（容器 stopPropagation 拦截 document 委托点击）',
     'v3.25.1（2026-10-14）：修复跨币种单侧缺数据被按 0 抵扣——单侧币种不宣称欠款方向，总欠款以参考净额为准',
     'v3.25.0（2026-10-14）：蓄水池 · 互购净额台账——订单勾选计入 A/B 两侧、按币种净额 + 参考净额折算、结算即标记已结算、手工账同步新建订单',
